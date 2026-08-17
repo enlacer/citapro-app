@@ -23,7 +23,7 @@ interface Trabajador {
   especialidad: string
 }
 
-export default function Inicio() {
+export default function HomePage() {
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [servicios, setServicios] = useState<Servicio[]>([])
   const [trabajadores, setTrabajadores] = useState<Trabajador[]>([])
@@ -57,28 +57,40 @@ export default function Inicio() {
     e.preventDefault()
     if (!servicioSeleccionado) return
 
-    // 1. Crear o buscar cliente
     let clienteId = null
-    const { data: clienteExistente } = await supabase.from('clientes').select('id').eq('telefono', clienteTelefono).single()
+    const { data: clienteExistente } = await supabase
+      .from('clientes')
+      .select('id')
+      .eq('telefono', clienteTelefono)
+      .maybeSingle()
 
     if (clienteExistente) {
       clienteId = clienteExistente.id
     } else {
-      const { data: nuevoCliente, error: errCliente } = await supabase.from('clientes').insert([
-        { nombre: clienteNombre, telefono: clienteTelefono }
-      ]).select('id').single()
+      const { data: nuevoCliente, error: errCliente } = await supabase
+        .from('clientes')
+        .insert([{ nombre: clienteNombre, telefono: clienteTelefono }])
+        .select('id')
+        .single()
 
       if (errCliente) return alert('Error al registrar cliente: ' + errCliente.message)
       clienteId = nuevoCliente.id
     }
 
-    // 2. Registrar Cita
+    // Cálculo de fecha_fin basándose en la duración del servicio
+    const inicio = new Date(fechaCita)
+    const duracionMinutos = servicioSeleccionado.duracion || 30
+    const fin = new Date(inicio.getTime() + duracionMinutos * 60000)
+    const fechaFinIso = fin.toISOString()
+
     const { error: errCita } = await supabase.from('citas').insert([
       {
         cliente_id: clienteId,
         servicio_id: servicioSeleccionado.id,
         trabajador_id: trabajadorSeleccionado || null,
-        fecha: fechaCita,
+        fecha_inicio: fechaCita,
+        fecha_fin: fechaFinIso,
+        precio_congelado: servicioSeleccionado.precio,
         estado: 'pendiente'
       }
     ])
@@ -148,7 +160,6 @@ export default function Inicio() {
                 ))}
               </div>
             ) : (
-              /* Formulario de reserva con selección de trabajador */
               <div className="bg-white p-6 rounded-xl shadow-md max-w-lg mx-auto">
                 <h3 className="text-xl font-bold text-gray-800 mb-4">Completar Reserva: {servicioSeleccionado.nombre}</h3>
                 <form onSubmit={agendarCita} className="space-y-4">
