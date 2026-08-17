@@ -25,20 +25,29 @@ interface Trabajador {
   activo: boolean
 }
 
+interface CitaReporte {
+  id: string
+  fecha: string
+  estado: string
+  servicios?: { nombre: string; precio: number }
+  trabajadores?: { nombre: string }
+}
+
 export default function AdminPage() {
   const [session, setSession] = useState<any>(null)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [authError, setAuthError] = useState('')
 
-  // Pestaña activa: 'servicios' | 'inventario' | 'trabajadores'
-  const [tabActiva, setTabActiva] = useState<'servicios' | 'inventario' | 'trabajadores'>('servicios')
+  // Pestaña activa: 'servicios' | 'inventario' | 'trabajadores' | 'analitica'
+  const [tabActiva, setTabActiva] = useState<'servicios' | 'inventario' | 'trabajadores' | 'analitica'>('servicios')
 
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [servicios, setServicios] = useState<any[]>([])
   const [productos, setProductos] = useState<ProductoInventario[]>([])
   const [registrosInventario, setRegistrosInventario] = useState<any[]>([])
   const [trabajadores, setTrabajadores] = useState<Trabajador[]>([])
+  const [citas, setCitas] = useState<CitaReporte[]>([])
   const [cargando, setCargando] = useState(true)
 
   // Formulario Servicios
@@ -105,6 +114,7 @@ export default function AdminPage() {
     const { data: prodData } = await supabase.from('inventario_productos').select('*, categorias(nombre)')
     const { data: regData } = await supabase.from('inventario_registros').select('*, inventario_productos(nombre)').order('created_at', { ascending: false }).limit(20)
     const { data: trabData } = await supabase.from('trabajadores').select('*').order('created_at', { ascending: false })
+    const { data: citasData } = await supabase.from('citas').select('*, servicios(nombre, precio), trabajadores(nombre)').order('fecha', { ascending: false })
 
     if (catData) {
       setCategorias(catData)
@@ -120,6 +130,7 @@ export default function AdminPage() {
     }
     if (regData) setRegistrosInventario(regData)
     if (trabData) setTrabajadores(trabData)
+    if (citasData) setCitas(citasData)
     setCargando(false)
   }
 
@@ -169,6 +180,28 @@ export default function AdminPage() {
       cargarAdminDatos()
     }
   }
+
+  // Cálculos de Analítica
+  const totalIngresos = citas.reduce((sum, c) => sum + (c.servicios?.precio || 0), 0)
+  const totalCitas = citas.length
+  const promedioCita = totalCitas > 0 ? (totalIngresos / totalCitas).toFixed(0) : 0
+
+  // Conteo de servicios más populares
+  const conteoServicios: { [key: string]: number } = {}
+  citas.forEach(c => {
+    const sNombre = c.servicios?.nombre || 'Desconocido'
+    conteoServicios[sNombre] = (conteoServicios[sNombre] || 0) + 1
+  })
+
+  // Conteo de citas por trabajador
+  const conteoTrabajadores: { [key: string]: number } = {}
+  citas.forEach(c => {
+    const tNombre = c.trabajadores?.nombre || 'Sin Asignar'
+    conteoTrabajadores[tNombre] = (conteoTrabajadores[tNombre] || 0) + 1
+  })
+
+  // Insumos con bajo stock (menos de 5 unidades)
+  const insumosBajoStock = productos.filter(p => p.stock_actual <= 5)
 
   if (!session) {
     return (
@@ -225,10 +258,10 @@ export default function AdminPage() {
         </div>
 
         {/* Pestañas de navegación */}
-        <div className="flex border-b border-gray-200 gap-6">
+        <div className="flex border-b border-gray-200 gap-6 overflow-x-auto">
           <button
             onClick={() => setTabActiva('servicios')}
-            className={`pb-3 font-semibold text-lg transition-colors border-b-2 ${
+            className={`pb-3 font-semibold text-lg transition-colors border-b-2 whitespace-nowrap ${
               tabActiva === 'servicios' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >
@@ -236,7 +269,7 @@ export default function AdminPage() {
           </button>
           <button
             onClick={() => setTabActiva('inventario')}
-            className={`pb-3 font-semibold text-lg transition-colors border-b-2 ${
+            className={`pb-3 font-semibold text-lg transition-colors border-b-2 whitespace-nowrap ${
               tabActiva === 'inventario' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >
@@ -244,11 +277,19 @@ export default function AdminPage() {
           </button>
           <button
             onClick={() => setTabActiva('trabajadores')}
-            className={`pb-3 font-semibold text-lg transition-colors border-b-2 ${
+            className={`pb-3 font-semibold text-lg transition-colors border-b-2 whitespace-nowrap ${
               tabActiva === 'trabajadores' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >
             Equipo de Trabajo
+          </button>
+          <button
+            onClick={() => setTabActiva('analitica')}
+            className={`pb-3 font-semibold text-lg transition-colors border-b-2 whitespace-nowrap ${
+              tabActiva === 'analitica' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Analítica & Reportes
           </button>
         </div>
 
@@ -520,6 +561,77 @@ export default function AdminPage() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        )}
+
+        {/* PESTAÑA ANALÍTICA */}
+        {tabActiva === 'analitica' && (
+          <div className="space-y-8">
+            {/* Tarjetas KPI */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+              <div className="bg-white p-6 rounded-xl shadow-md border-l-4 border-blue-600">
+                <p className="text-sm font-medium text-gray-500">Ingresos Estimados</p>
+                <p className="text-3xl font-bold text-gray-800">${totalIngresos.toLocaleString()}</p>
+              </div>
+              <div className="bg-white p-6 rounded-xl shadow-md border-l-4 border-green-600">
+                <p className="text-sm font-medium text-gray-500">Total de Citas</p>
+                <p className="text-3xl font-bold text-gray-800">{totalCitas}</p>
+              </div>
+              <div className="bg-white p-6 rounded-xl shadow-md border-l-4 border-purple-600">
+                <p className="text-sm font-medium text-gray-500">Ticket Promedio</p>
+                <p className="text-3xl font-bold text-gray-800">${Number(promedioCita).toLocaleString()}</p>
+              </div>
+            </div>
+
+            {/* Alertas de Insumos Bajos */}
+            {insumosBajoStock.length > 0 && (
+              <div className="bg-red-50 border-l-4 border-red-500 p-6 rounded-xl shadow-sm">
+                <h3 className="text-lg font-bold text-red-800 mb-2">⚠️ Alerta de Stock Bajo</h3>
+                <p className="text-sm text-red-700 mb-3">Los siguientes insumos requieren reabastecimiento pronto:</p>
+                <ul className="list-disc list-inside text-sm text-red-800 font-medium space-y-1">
+                  {insumosBajoStock.map(p => (
+                    <li key={p.id}>{p.nombre}: {p.stock_actual} {p.unidad_medida} disponibles</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Tablas de Análisis */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Servicios más populares */}
+              <div className="bg-white p-6 rounded-xl shadow-md">
+                <h3 className="text-lg font-bold text-gray-800 mb-4">Servicios Más Solicitados</h3>
+                {Object.keys(conteoServicios).length === 0 ? (
+                  <p className="text-gray-500 text-sm">No hay citas registradas aún.</p>
+                ) : (
+                  <ul className="space-y-3">
+                    {Object.entries(conteoServicios).map(([servicio, cantidad]) => (
+                      <li key={servicio} className="flex justify-between items-center border-b pb-2">
+                        <span className="font-medium text-gray-700">{servicio}</span>
+                        <span className="bg-blue-100 text-blue-800 text-xs font-bold px-3 py-1 rounded-full">{cantidad} citas</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              {/* Rendimiento del equipo */}
+              <div className="bg-white p-6 rounded-xl shadow-md">
+                <h3 className="text-lg font-bold text-gray-800 mb-4">Citas por Profesional</h3>
+                {Object.keys(conteoTrabajadores).length === 0 ? (
+                  <p className="text-gray-500 text-sm">No hay citas registradas aún.</p>
+                ) : (
+                  <ul className="space-y-3">
+                    {Object.entries(conteoTrabajadores).map(([trabajador, cantidad]) => (
+                      <li key={trabajador} className="flex justify-between items-center border-b pb-2">
+                        <span className="font-medium text-gray-700">{trabajador}</span>
+                        <span className="bg-purple-100 text-purple-800 text-xs font-bold px-3 py-1 rounded-full">{cantidad} citas</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </div>
           </div>
         )}
