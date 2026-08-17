@@ -17,19 +17,28 @@ interface ProductoInventario {
   categorias?: { nombre: string }
 }
 
+interface Trabajador {
+  id: string
+  nombre: string
+  especialidad: string
+  telefono?: string
+  activo: boolean
+}
+
 export default function AdminPage() {
   const [session, setSession] = useState<any>(null)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [authError, setAuthError] = useState('')
 
-  // Pestaña activa: 'servicios' | 'inventario'
-  const [tabActiva, setTabActiva] = useState<'servicios' | 'inventario'>('servicios')
+  // Pestaña activa: 'servicios' | 'inventario' | 'trabajadores'
+  const [tabActiva, setTabActiva] = useState<'servicios' | 'inventario' | 'trabajadores'>('servicios')
 
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [servicios, setServicios] = useState<any[]>([])
   const [productos, setProductos] = useState<ProductoInventario[]>([])
   const [registrosInventario, setRegistrosInventario] = useState<any[]>([])
+  const [trabajadores, setTrabajadores] = useState<Trabajador[]>([])
   const [cargando, setCargando] = useState(true)
 
   // Formulario Servicios
@@ -40,7 +49,7 @@ export default function AdminPage() {
     categoria_id: ''
   })
 
-  // Formulario Nuevo Producto Inventario
+  // Formulario Producto
   const [nuevoProducto, setNuevoProducto] = useState({
     nombre: '',
     unidad_medida: 'unidades',
@@ -48,12 +57,19 @@ export default function AdminPage() {
     categoria_id: ''
   })
 
-  // Formulario Registro Diario (Apertura / Cierre)
+  // Formulario Registro Diario
   const [nuevoRegistro, setNuevoRegistro] = useState({
     producto_id: '',
     tipo: 'apertura',
     cantidad: 0,
     observaciones: ''
+  })
+
+  // Formulario Trabajador
+  const [nuevoTrabajador, setNuevoTrabajador] = useState({
+    nombre: '',
+    especialidad: '',
+    telefono: ''
   })
 
   useEffect(() => {
@@ -88,6 +104,7 @@ export default function AdminPage() {
     const { data: servData } = await supabase.from('servicios').select('*, categorias(nombre)')
     const { data: prodData } = await supabase.from('inventario_productos').select('*, categorias(nombre)')
     const { data: regData } = await supabase.from('inventario_registros').select('*, inventario_productos(nombre)').order('created_at', { ascending: false }).limit(20)
+    const { data: trabData } = await supabase.from('trabajadores').select('*').order('created_at', { ascending: false })
 
     if (catData) {
       setCategorias(catData)
@@ -99,23 +116,17 @@ export default function AdminPage() {
     if (servData) setServicios(servData)
     if (prodData) {
       setProductos(prodData)
-      if (prodData.length > 0) {
-        setNuevoRegistro(prev => ({ ...prev, producto_id: prodData[0].id }))
-      }
+      if (prodData.length > 0) setNuevoRegistro(prev => ({ ...prev, producto_id: prodData[0].id }))
     }
     if (regData) setRegistrosInventario(regData)
+    if (trabData) setTrabajadores(trabData)
     setCargando(false)
   }
 
   async function guardarServicio(e: React.FormEvent) {
     e.preventDefault()
     if (!nuevoServicio.categoria_id) return alert('Selecciona una categoría')
-
-    const { error } = await supabase.from('servicios').insert([{
-      ...nuevoServicio,
-      activo: true
-    }])
-
+    const { error } = await supabase.from('servicios').insert([{ ...nuevoServicio, activo: true }])
     if (error) alert('Error: ' + error.message)
     else {
       alert('¡Servicio guardado con éxito!')
@@ -127,7 +138,6 @@ export default function AdminPage() {
   async function guardarProducto(e: React.FormEvent) {
     e.preventDefault()
     const { error } = await supabase.from('inventario_productos').insert([nuevoProducto])
-
     if (error) alert('Error: ' + error.message)
     else {
       alert('¡Producto creado exitosamente!')
@@ -139,19 +149,23 @@ export default function AdminPage() {
   async function guardarRegistroInventario(e: React.FormEvent) {
     e.preventDefault()
     if (!nuevoRegistro.producto_id) return alert('Selecciona un producto')
-
     const { error } = await supabase.from('inventario_registros').insert([nuevoRegistro])
-
     if (error) alert('Error: ' + error.message)
     else {
       alert(`¡Registro de ${nuevoRegistro.tipo.toUpperCase()} guardado!`)
-      
-      // Actualizar el stock actual del producto
-      await supabase.from('inventario_productos')
-        .update({ stock_actual: nuevoRegistro.cantidad })
-        .eq('id', nuevoRegistro.producto_id)
-
+      await supabase.from('inventario_productos').update({ stock_actual: nuevoRegistro.cantidad }).eq('id', nuevoRegistro.producto_id)
       setNuevoRegistro(prev => ({ ...prev, cantidad: 0, observaciones: '' }))
+      cargarAdminDatos()
+    }
+  }
+
+  async function guardarTrabajador(e: React.FormEvent) {
+    e.preventDefault()
+    const { error } = await supabase.from('trabajadores').insert([{ ...nuevoTrabajador, activo: true }])
+    if (error) alert('Error: ' + error.message)
+    else {
+      alert('¡Trabajador registrado exitosamente!')
+      setNuevoTrabajador({ nombre: '', especialidad: '', telefono: '' })
       cargarAdminDatos()
     }
   }
@@ -210,14 +224,12 @@ export default function AdminPage() {
           </button>
         </div>
 
-        {/* Navegación por pestañas */}
-        <div className="flex border-b border-gray-200 gap-4">
+        {/* Pestañas de navegación */}
+        <div className="flex border-b border-gray-200 gap-6">
           <button
             onClick={() => setTabActiva('servicios')}
             className={`pb-3 font-semibold text-lg transition-colors border-b-2 ${
-              tabActiva === 'servicios'
-                ? 'border-blue-600 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
+              tabActiva === 'servicios' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >
             Catálogo & Servicios
@@ -225,16 +237,22 @@ export default function AdminPage() {
           <button
             onClick={() => setTabActiva('inventario')}
             className={`pb-3 font-semibold text-lg transition-colors border-b-2 ${
-              tabActiva === 'inventario'
-                ? 'border-blue-600 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
+              tabActiva === 'inventario' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >
-            Inventario Diario (Apertura / Cierre)
+            Inventario Diario
+          </button>
+          <button
+            onClick={() => setTabActiva('trabajadores')}
+            className={`pb-3 font-semibold text-lg transition-colors border-b-2 ${
+              tabActiva === 'trabajadores' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Equipo de Trabajo
           </button>
         </div>
 
-        {/* PESTAÑA 1: SERVICIOS */}
+        {/* PESTAÑA SERVICIOS */}
         {tabActiva === 'servicios' && (
           <div className="space-y-8">
             <div className="bg-white p-6 rounded-xl shadow-md">
@@ -248,7 +266,6 @@ export default function AdminPage() {
                     value={nuevoServicio.nombre}
                     onChange={e => setNuevoServicio({ ...nuevoServicio, nombre: e.target.value })}
                     className="w-full border rounded-lg p-2"
-                    placeholder="Ej. Manicura Semipermanente"
                   />
                 </div>
                 <div>
@@ -317,10 +334,9 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* PESTAÑA 2: INVENTARIO */}
+        {/* PESTAÑA INVENTARIO */}
         {tabActiva === 'inventario' && (
           <div className="space-y-8">
-            {/* Formulario Crear Producto */}
             <div className="bg-white p-6 rounded-xl shadow-md">
               <h2 className="text-xl font-semibold mb-4 text-gray-700">1. Crear Nuevo Insumo / Producto</h2>
               <form onSubmit={guardarProducto} className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -332,7 +348,6 @@ export default function AdminPage() {
                     value={nuevoProducto.nombre}
                     onChange={e => setNuevoProducto({ ...nuevoProducto, nombre: e.target.value })}
                     className="w-full border rounded-lg p-2"
-                    placeholder="Ej. Cera de Miel 500g"
                   />
                 </div>
                 <div>
@@ -378,90 +393,129 @@ export default function AdminPage() {
               </form>
             </div>
 
-            {/* Formulario Apertura y Cierre */}
             <div className="bg-white p-6 rounded-xl shadow-md">
               <h2 className="text-xl font-semibold mb-4 text-gray-700">2. Registro Diario de Apertura / Cierre</h2>
-              {productos.length === 0 ? (
-                <p className="text-gray-500">Primero registra al menos un insumo en el paso anterior.</p>
-              ) : (
-                <form onSubmit={guardarRegistroInventario} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Insumo</label>
-                    <select
-                      value={nuevoRegistro.producto_id}
-                      onChange={e => setNuevoRegistro({ ...nuevoRegistro, producto_id: e.target.value })}
-                      className="w-full border rounded-lg p-2 bg-white"
-                    >
-                      {productos.map(p => (
-                        <option key={p.id} value={p.id}>{p.nombre} (Stock actual: {p.stock_actual} {p.unidad_medida})</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Tipo de Registro</label>
-                    <select
-                      value={nuevoRegistro.tipo}
-                      onChange={e => setNuevoRegistro({ ...nuevoRegistro, tipo: e.target.value })}
-                      className="w-full border rounded-lg p-2 bg-white"
-                    >
-                      <option value="apertura">Apertura (Inicio de jornada)</option>
-                      <option value="cierre">Cierre (Fin de jornada)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Cantidad Contada</label>
-                    <input
-                      type="number"
-                      required
-                      value={nuevoRegistro.cantidad}
-                      onChange={e => setNuevoRegistro({ ...nuevoRegistro, cantidad: Number(e.target.value) })}
-                      className="w-full border rounded-lg p-2"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Observaciones / Notas</label>
-                    <input
-                      type="text"
-                      value={nuevoRegistro.observaciones}
-                      onChange={e => setNuevoRegistro({ ...nuevoRegistro, observaciones: e.target.value })}
-                      className="w-full border rounded-lg p-2"
-                      placeholder="Ej. Se derramó un frasco"
-                    />
-                  </div>
-                  <div className="md:col-span-2">
-                    <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 rounded-lg">
-                      Guardar Conteo Diario
-                    </button>
-                  </div>
-                </form>
-              )}
+              <form onSubmit={guardarRegistroInventario} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Insumo</label>
+                  <select
+                    value={nuevoRegistro.producto_id}
+                    onChange={e => setNuevoRegistro({ ...nuevoRegistro, producto_id: e.target.value })}
+                    className="w-full border rounded-lg p-2 bg-white"
+                  >
+                    {productos.map(p => (
+                      <option key={p.id} value={p.id}>{p.nombre} (Stock: {p.stock_actual} {p.unidad_medida})</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Tipo de Registro</label>
+                  <select
+                    value={nuevoRegistro.tipo}
+                    onChange={e => setNuevoRegistro({ ...nuevoRegistro, tipo: e.target.value })}
+                    className="w-full border rounded-lg p-2 bg-white"
+                  >
+                    <option value="apertura">Apertura (Inicio)</option>
+                    <option value="cierre">Cierre (Fin)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Cantidad Contada</label>
+                  <input
+                    type="number"
+                    required
+                    value={nuevoRegistro.cantidad}
+                    onChange={e => setNuevoRegistro({ ...nuevoRegistro, cantidad: Number(e.target.value) })}
+                    className="w-full border rounded-lg p-2"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Notas</label>
+                  <input
+                    type="text"
+                    value={nuevoRegistro.observaciones}
+                    onChange={e => setNuevoRegistro({ ...nuevoRegistro, observaciones: e.target.value })}
+                    className="w-full border rounded-lg p-2"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 rounded-lg">
+                    Guardar Conteo
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* PESTAÑA TRABAJADORES */}
+        {tabActiva === 'trabajadores' && (
+          <div className="space-y-8">
+            <div className="bg-white p-6 rounded-xl shadow-md">
+              <h2 className="text-xl font-semibold mb-4 text-gray-700">Registrar Colaborador / Trabajador</h2>
+              <form onSubmit={guardarTrabajador} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nombre Completo</label>
+                  <input
+                    type="text"
+                    required
+                    value={nuevoTrabajador.nombre}
+                    onChange={e => setNuevoTrabajador({ ...nuevoTrabajador, nombre: e.target.value })}
+                    className="w-full border rounded-lg p-2"
+                    placeholder="Ej. Sofía Martínez"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Especialidad / Área</label>
+                  <input
+                    type="text"
+                    required
+                    value={nuevoTrabajador.especialidad}
+                    onChange={e => setNuevoTrabajador({ ...nuevoTrabajador, especialidad: e.target.value })}
+                    className="w-full border rounded-lg p-2"
+                    placeholder="Ej. Spa de Uñas, Barbería..."
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Teléfono de Contacto (Opcional)</label>
+                  <input
+                    type="text"
+                    value={nuevoTrabajador.telefono}
+                    onChange={e => setNuevoTrabajador({ ...nuevoTrabajador, telefono: e.target.value })}
+                    className="w-full border rounded-lg p-2"
+                    placeholder="Ej. +57 300 123 4567"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <button type="submit" className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 rounded-lg">
+                    Agregar Trabajador
+                  </button>
+                </div>
+              </form>
             </div>
 
-            {/* Historial Reciente */}
             <div className="bg-white p-6 rounded-xl shadow-md">
-              <h2 className="text-xl font-semibold mb-4 text-gray-700">Historial de Conteos Diarios</h2>
+              <h2 className="text-xl font-semibold mb-4 text-gray-700">Equipo Registrado</h2>
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="border-b bg-gray-50">
-                    <th className="p-3">Fecha</th>
-                    <th className="p-3">Insumo</th>
-                    <th className="p-3">Tipo</th>
-                    <th className="p-3">Cantidad</th>
-                    <th className="p-3">Notas</th>
+                    <th className="p-3">Nombre</th>
+                    <th className="p-3">Especialidad</th>
+                    <th className="p-3">Teléfono</th>
+                    <th className="p-3">Estado</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {registrosInventario.map(reg => (
-                    <tr key={reg.id} className="border-b">
-                      <td className="p-3 text-sm">{new Date(reg.created_at).toLocaleDateString()}</td>
-                      <td className="p-3 font-medium">{reg.inventario_productos?.nombre || 'Insumo'}</td>
+                  {trabajadores.map(trab => (
+                    <tr key={trab.id} className="border-b">
+                      <td className="p-3 font-medium">{trab.nombre}</td>
+                      <td className="p-3 text-purple-700 font-medium">{trab.especialidad}</td>
+                      <td className="p-3 text-gray-600">{trab.telefono || '-'}</td>
                       <td className="p-3">
-                        <span className={`px-2 py-1 rounded text-xs font-bold ${reg.tipo === 'apertura' ? 'bg-blue-100 text-blue-800' : 'bg-orange-100 text-orange-800'}`}>
-                          {reg.tipo.toUpperCase()}
+                        <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded font-bold">
+                          ACTIVO
                         </span>
                       </td>
-                      <td className="p-3 font-bold">{reg.cantidad}</td>
-                      <td className="p-3 text-gray-500 text-sm">{reg.observaciones || '-'}</td>
                     </tr>
                   ))}
                 </tbody>
