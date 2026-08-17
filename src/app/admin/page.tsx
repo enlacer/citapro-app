@@ -17,11 +17,15 @@ interface Servicio {
 }
 
 export default function AdminPage() {
+  const [session, setSession] = useState<any>(null)
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [authError, setAuthError] = useState('')
+
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [servicios, setServicios] = useState<any[]>([])
   const [cargando, setCargando] = useState(true)
 
-  // Estado del formulario para crear un servicio
   const [nuevoServicio, setNuevoServicio] = useState<Servicio>({
     nombre: '',
     precio: 0,
@@ -30,13 +34,35 @@ export default function AdminPage() {
   })
 
   useEffect(() => {
-    cargarAdminDatos()
+    // Validar sesión actual
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+      if (session) cargarAdminDatos()
+      else setCargando(false)
+    })
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session)
+      if (session) cargarAdminDatos()
+    })
+
+    return () => subscription.unsubscribe()
   }, [])
 
+  async function handleLogin(e: React.FormEvent) {
+    e.preventDefault()
+    setAuthError('')
+    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    if (error) setAuthError(error.message)
+  }
+
+  async function handleLogout() {
+    await supabase.auth.signOut()
+  }
+
   async function cargarAdminDatos() {
-    // Cargar categorías disponibles
+    setCargando(true)
     const { data: catData } = await supabase.from('categorias').select('*').eq('activo', true)
-    // Cargar servicios junto con el nombre de su categoría asociada
     const { data: servData } = await supabase.from('servicios').select('*, categorias(nombre)')
 
     if (catData) {
@@ -80,14 +106,61 @@ export default function AdminPage() {
     }
   }
 
+  // Vista de formulario de Login si no hay sesión
+  if (!session) {
+    return (
+      <main className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+        <div className="bg-white p-8 rounded-xl shadow-md w-full max-w-md space-y-4">
+          <h1 className="text-2xl font-bold text-gray-800 text-center">Iniciar Sesión - Admin</h1>
+          {authError && <p className="text-red-500 text-sm text-center">{authError}</p>}
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Correo Electrónico</label>
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                className="w-full border rounded-lg p-2 mt-1"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Contraseña</label>
+              <input
+                type="password"
+                required
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                className="w-full border rounded-lg p-2 mt-1"
+              />
+            </div>
+            <button
+              type="submit"
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-colors"
+            >
+              Entrar
+            </button>
+          </form>
+        </div>
+      </main>
+    )
+  }
+
   if (cargando) return <div className="p-10 text-center">Cargando Panel de Administración...</div>
 
   return (
     <main className="min-h-screen bg-gray-100 p-8">
       <div className="max-w-5xl mx-auto space-y-8">
-        <h1 className="text-3xl font-bold text-gray-800">Panel de Administración - CitaPro</h1>
+        <div className="flex justify-between items-center">
+          <h1 className="text-3xl font-bold text-gray-800">Panel de Administración - CitaPro</h1>
+          <button
+            onClick={handleLogout}
+            className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          >
+            Cerrar Sesión
+          </button>
+        </div>
 
-        {/* Formulario de creación de nuevos servicios */}
         <div className="bg-white p-6 rounded-xl shadow-md">
           <h2 className="text-xl font-semibold mb-4 text-gray-700">Agregar Nuevo Servicio</h2>
           <form onSubmit={guardarServicio} className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -153,7 +226,6 @@ export default function AdminPage() {
           </form>
         </div>
 
-        {/* Tabla / Lista de Servicios Activos */}
         <div className="bg-white p-6 rounded-xl shadow-md">
           <h2 className="text-xl font-semibold mb-4 text-gray-700">Catálogo Actual</h2>
           <div className="overflow-x-auto">
