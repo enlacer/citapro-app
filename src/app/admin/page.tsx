@@ -278,13 +278,33 @@ export default function AdminDashboard() {
       )
   }
 
+  // Cálculos analíticos avanzados
   const totalCitas = citas.length
   const citasCompletadas = citas.filter(c => c.estado === 'completada').length
-  const ingresosTotales = citas
+  const citasConfirmadas = citas.filter(c => c.estado === 'confirmada').length
+  const citasPendientes = citas.filter(c => c.estado === 'pendiente').length
+  const citasCanceladas = citas.filter(c => c.estado === 'cancelada').length
+
+  const ingresosReales = citas
+    .filter(c => c.estado === 'completada')
+    .reduce((acc, curr) => acc + (curr.precio_congelado || 0), 0)
+
+  const ingresosEstimados = citas
     .filter(c => c.estado === 'completada' || c.estado === 'confirmada')
     .reduce((acc, curr) => acc + (curr.precio_congelado || 0), 0)
 
   const tasaExito = totalCitas > 0 ? ((citasCompletadas / totalCitas) * 100).toFixed(1) : '0'
+  const tasaCancelacion = totalCitas > 0 ? ((citasCanceladas / totalCitas) * 100).toFixed(1) : '0'
+  const ticketPromedio = totalCitas > 0 ? (ingresosEstimados / totalCitas).toFixed(0) : '0'
+
+  // Servicio más solicitado
+  const conteoServicios: { [key: string]: number } = {}
+  citas.forEach(c => {
+    if (c.servicios?.nombre) {
+      conteoServicios[c.servicios.nombre] = (conteoServicios[c.servicios.nombre] || 0) + 1
+    }
+  })
+  const servicioMasPopular = Object.entries(conteoServicios).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Sin datos'
 
   return (
     <main className="min-h-screen bg-gray-50 p-6">
@@ -431,7 +451,8 @@ export default function AdminDashboard() {
             )}
 
             {pestanaActiva === 'analitica' && (
-                <div className="space-y-6">
+              <div className="space-y-6">
+                {/* Resumen Principal Financiero y de Volumen */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                   <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
                     <p className="text-sm text-gray-500 font-medium">Total de Citas</p>
@@ -446,8 +467,38 @@ export default function AdminDashboard() {
                     <p className="text-3xl font-bold text-blue-600 mt-2">{tasaExito}%</p>
                   </div>
                   <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-                    <p className="text-sm text-gray-500 font-medium">Ingresos Estimados</p>
-                    <p className="text-3xl font-bold text-green-600 mt-2">${ingresosTotales}</p>
+                    <p className="text-sm text-gray-500 font-medium">Ingresos Estimados (Conf. + Comp.)</p>
+                    <p className="text-3xl font-bold text-green-600 mt-2">${ingresosEstimados}</p>
+                  </div>
+                </div>
+
+                {/* Métricas y Desgloses Secundarios */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 space-y-4">
+                    <h3 className="font-bold text-gray-800 text-base border-b pb-2">📋 Desglose por Estado</h3>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between"><span className="text-gray-500">Confirmadas:</span><span className="font-bold text-blue-600">{citasConfirmadas}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-500">Pendientes:</span><span className="font-bold text-amber-600">{citasPendientes}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-500">Canceladas:</span><span className="font-bold text-red-600">{citasCanceladas}</span></div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 space-y-4">
+                    <h3 className="font-bold text-gray-800 text-base border-b pb-2">💰 Finanzas y Promedios</h3>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between"><span className="text-gray-500">Ingresos Reales (Completadas):</span><span className="font-bold text-emerald-600">${ingresosReales}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-500">Ticket Promedio por Cita:</span><span className="font-bold text-gray-800">${ticketPromedio}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-500">Tasa de Cancelación:</span><span className="font-bold text-red-600">{tasaCancelacion}%</span></div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 space-y-4">
+                    <h3 className="font-bold text-gray-800 text-base border-b pb-2">🏆 Preferencias y Destacados</h3>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between"><span className="text-gray-500">Servicio más popular:</span><span className="font-bold text-indigo-600 text-right truncate max-w-[150px]">{servicioMasPopular}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-500">Total de profesionales:</span><span className="font-bold text-gray-800">{trabajadores.length}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-500">Total de servicios:</span><span className="font-bold text-gray-800">{servicios.length}</span></div>
+                    </div>
                   </div>
                 </div>
               </div>
