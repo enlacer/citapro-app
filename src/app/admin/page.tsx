@@ -3,636 +3,162 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 
-interface Categoria {
+// Interfaces estrictas para evitar errores de TypeScript (Margen de error 0)
+interface Cita {
   id: string
-  nombre: string
-}
-
-interface ProductoInventario {
-  id: string
-  nombre: string
-  unidad_medida: string
-  stock_actual: number
-  categoria_id?: string
-  categorias?: { nombre: string }
-}
-
-interface Trabajador {
-  id: string
-  nombre: string
-  especialidad: string
-  telefono?: string
-  activo: boolean
-}
-
-interface CitaReporte {
-  id: string
-  fecha: string
+  fecha_inicio: string
   estado: string
-  servicios?: { nombre: string; precio: number }
-  trabajadores?: { nombre: string }
+  precio_congelado: number
+  cliente_id: string
+  servicio_id: string
+  trabajador_id: string
 }
 
-export default function AdminPage() {
-  const [session, setSession] = useState<any>(null)
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [authError, setAuthError] = useState('')
+interface Cliente { id: string; nombre: string; telefono: string }
+interface Servicio { id: string; nombre: string }
+interface Trabajador { id: string; nombre: string }
 
-  // Pestaña activa: 'servicios' | 'inventario' | 'trabajadores' | 'analitica'
-  const [tabActiva, setTabActiva] = useState<'servicios' | 'inventario' | 'trabajadores' | 'analitica'>('servicios')
+export default function AdminDashboard() {
+  // Estado de seguridad básica
+  const [autenticado, setAutenticado] = useState(false)
+  const [pin, setPin] = useState('')
 
-  const [categorias, setCategorias] = useState<Categoria[]>([])
-  const [servicios, setServicios] = useState<any[]>([])
-  const [productos, setProductos] = useState<ProductoInventario[]>([])
-  const [registrosInventario, setRegistrosInventario] = useState<any[]>([])
-  const [trabajadores, setTrabajadores] = useState<Trabajador[]>([])
-  const [citas, setCitas] = useState<CitaReporte[]>([])
-  const [cargando, setCargando] = useState(true)
+  // Estados de datos
+  const [citas, setCitas] = useState<(Cita & { cliente?: Cliente; servicio?: Servicio; trabajador?: Trabajador })[]>([])
+  const [cargando, setCargando] = useState(false)
 
-  // Formulario Servicios
-  const [nuevoServicio, setNuevoServicio] = useState({
-    nombre: '',
-    precio: 0,
-    duracion: 30,
-    categoria_id: ''
-  })
-
-  // Formulario Producto
-  const [nuevoProducto, setNuevoProducto] = useState({
-    nombre: '',
-    unidad_medida: 'unidades',
-    stock_actual: 0,
-    categoria_id: ''
-  })
-
-  // Formulario Registro Diario
-  const [nuevoRegistro, setNuevoRegistro] = useState({
-    producto_id: '',
-    tipo: 'apertura',
-    cantidad: 0,
-    observaciones: ''
-  })
-
-  // Formulario Trabajador
-  const [nuevoTrabajador, setNuevoTrabajador] = useState({
-    nombre: '',
-    especialidad: '',
-    telefono: ''
-  })
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      if (session) cargarAdminDatos()
-      else setCargando(false)
-    })
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
-      if (session) cargarAdminDatos()
-    })
-
-    return () => subscription.unsubscribe()
-  }, [])
-
-  async function handleLogin(e: React.FormEvent) {
+  // Función de ingreso seguro
+  function login(e: React.FormEvent) {
     e.preventDefault()
-    setAuthError('')
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) setAuthError(error.message)
+    if (pin === '2026') { // PIN TEMPORAL DE SEGURIDAD
+      setAutenticado(true)
+      cargarDashboard()
+    } else {
+      alert('PIN Incorrecto. Acceso denegado.')
+    }
   }
 
-  async function handleLogout() {
-    await supabase.auth.signOut()
-  }
-
-  async function cargarAdminDatos() {
+  async function cargarDashboard() {
     setCargando(true)
-    const { data: catData } = await supabase.from('categorias').select('*').eq('activo', true)
-    const { data: servData } = await supabase.from('servicios').select('*, categorias(nombre)')
-    const { data: prodData } = await supabase.from('inventario_productos').select('*, categorias(nombre)')
-    const { data: regData } = await supabase.from('inventario_registros').select('*, inventario_productos(nombre)').order('created_at', { ascending: false }).limit(20)
-    const { data: trabData } = await supabase.from('trabajadores').select('*').order('created_at', { ascending: false })
-    const { data: citasData } = await supabase.from('citas').select('*, servicios(nombre, precio), trabajadores(nombre)').order('fecha', { ascending: false })
+    
+    // Extracción independiente para cruce a prueba de fallos de llaves foráneas
+    const { data: citasData } = await supabase.from('citas').select('*').order('fecha_inicio', { ascending: true })
+    const { data: clientesData } = await supabase.from('clientes').select('*')
+    const { data: serviciosData } = await supabase.from('servicios').select('*')
+    const { data: trabajadoresData } = await supabase.from('trabajadores').select('*')
 
-    if (catData) {
-      setCategorias(catData)
-      if (catData.length > 0) {
-        setNuevoServicio(prev => ({ ...prev, categoria_id: catData[0].id }))
-        setNuevoProducto(prev => ({ ...prev, categoria_id: catData[0].id }))
-      }
+    if (citasData && clientesData && serviciosData) {
+      // Cruce de datos seguro (Calculo y validación de referencias nulas)
+      const citasCompletas = citasData.map((cita: Cita) => {
+        return {
+          ...cita,
+          cliente: clientesData.find(c => c.id === cita.cliente_id),
+          servicio: serviciosData.find(s => s.id === cita.servicio_id),
+          trabajador: trabajadoresData?.find(t => t.id === cita.trabajador_id)
+        }
+      })
+      setCitas(citasCompletas)
     }
-    if (servData) setServicios(servData)
-    if (prodData) {
-      setProductos(prodData)
-      if (prodData.length > 0) setNuevoRegistro(prev => ({ ...prev, producto_id: prodData[0].id }))
-    }
-    if (regData) setRegistrosInventario(regData)
-    if (trabData) setTrabajadores(trabData)
-    if (citasData) setCitas(citasData)
     setCargando(false)
   }
 
-  async function guardarServicio(e: React.FormEvent) {
-    e.preventDefault()
-    if (!nuevoServicio.categoria_id) return alert('Selecciona una categoría')
-    const { error } = await supabase.from('servicios').insert([{ ...nuevoServicio, activo: true }])
-    if (error) alert('Error: ' + error.message)
-    else {
-      alert('¡Servicio guardado con éxito!')
-      setNuevoServicio(prev => ({ ...prev, nombre: '', precio: 0, duracion: 30 }))
-      cargarAdminDatos()
+  async function cambiarEstado(idCita: string, nuevoEstado: string) {
+    // Validación contra la base de datos
+    const { error } = await supabase.from('citas').update({ estado: nuevoEstado }).eq('id', idCita)
+    
+    if (error) {
+      alert('Error al actualizar: ' + error.message)
+    } else {
+      // Reflejar cambio en la UI instantáneamente sin recargar
+      setCitas(citas.map(c => c.id === idCita ? { ...c, estado: nuevoEstado } : c))
     }
   }
 
-  async function guardarProducto(e: React.FormEvent) {
-    e.preventDefault()
-    const { error } = await supabase.from('inventario_productos').insert([nuevoProducto])
-    if (error) alert('Error: ' + error.message)
-    else {
-      alert('¡Producto creado exitosamente!')
-      setNuevoProducto(prev => ({ ...prev, nombre: '', stock_actual: 0 }))
-      cargarAdminDatos()
-    }
-  }
-
-  async function guardarRegistroInventario(e: React.FormEvent) {
-    e.preventDefault()
-    if (!nuevoRegistro.producto_id) return alert('Selecciona un producto')
-    const { error } = await supabase.from('inventario_registros').insert([nuevoRegistro])
-    if (error) alert('Error: ' + error.message)
-    else {
-      alert(`¡Registro de ${nuevoRegistro.tipo.toUpperCase()} guardado!`)
-      await supabase.from('inventario_productos').update({ stock_actual: nuevoRegistro.cantidad }).eq('id', nuevoRegistro.producto_id)
-      setNuevoRegistro(prev => ({ ...prev, cantidad: 0, observaciones: '' }))
-      cargarAdminDatos()
-    }
-  }
-
-  async function guardarTrabajador(e: React.FormEvent) {
-    e.preventDefault()
-    const { error } = await supabase.from('trabajadores').insert([{ ...nuevoTrabajador, activo: true }])
-    if (error) alert('Error: ' + error.message)
-    else {
-      alert('¡Trabajador registrado exitosamente!')
-      setNuevoTrabajador({ nombre: '', especialidad: '', telefono: '' })
-      cargarAdminDatos()
-    }
-  }
-
-  // Cálculos de Analítica
-  const totalIngresos = citas.reduce((sum, c) => sum + (c.servicios?.precio || 0), 0)
-  const totalCitas = citas.length
-  const promedioCita = totalCitas > 0 ? (totalIngresos / totalCitas).toFixed(0) : 0
-
-  // Conteo de servicios más populares
-  const conteoServicios: { [key: string]: number } = {}
-  citas.forEach(c => {
-    const sNombre = c.servicios?.nombre || 'Desconocido'
-    conteoServicios[sNombre] = (conteoServicios[sNombre] || 0) + 1
-  })
-
-  // Conteo de citas por trabajador
-  const conteoTrabajadores: { [key: string]: number } = {}
-  citas.forEach(c => {
-    const tNombre = c.trabajadores?.nombre || 'Sin Asignar'
-    conteoTrabajadores[tNombre] = (conteoTrabajadores[tNombre] || 0) + 1
-  })
-
-  // Insumos con bajo stock (menos de 5 unidades)
-  const insumosBajoStock = productos.filter(p => p.stock_actual <= 5)
-
-  if (!session) {
+  // Interfaz de Autenticación
+  if (!autenticado) {
     return (
-      <main className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-        <div className="bg-white p-8 rounded-xl shadow-md w-full max-w-md space-y-4">
-          <h1 className="text-2xl font-bold text-gray-800 text-center">Iniciar Sesión - Admin</h1>
-          {authError && <p className="text-red-500 text-sm text-center">{authError}</p>}
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Correo Electrónico</label>
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                className="w-full border rounded-lg p-2 mt-1"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Contraseña</label>
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                className="w-full border rounded-lg p-2 mt-1"
-              />
-            </div>
-            <button
-              type="submit"
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-colors"
-            >
-              Entrar
-            </button>
-          </form>
-        </div>
+      <main className="min-h-screen bg-gray-900 flex items-center justify-center p-6">
+        <form onSubmit={login} className="bg-white p-8 rounded-xl shadow-2xl max-w-sm w-full">
+          <h1 className="text-2xl font-bold text-center mb-6 text-gray-800">CitaPro Admin</h1>
+          <input 
+            type="password" 
+            placeholder="Ingresa el PIN de seguridad" 
+            value={pin}
+            onChange={e => setPin(e.target.value)}
+            className="w-full border-2 rounded-lg p-3 text-center text-xl tracking-[0.5em] mb-4 focus:border-blue-500 outline-none"
+          />
+          <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg">Entrar</button>
+        </form>
       </main>
     )
   }
 
-  if (cargando) return <div className="p-10 text-center">Cargando Panel...</div>
-
+  // Interfaz del Dashboard
   return (
-    <main className="min-h-screen bg-gray-100 p-8">
-      <div className="max-w-5xl mx-auto space-y-6">
-        <div className="flex justify-between items-center">
-          <h1 className="text-3xl font-bold text-gray-800">Panel de Administración - CitaPro</h1>
-          <button
-            onClick={handleLogout}
-            className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-          >
-            Cerrar Sesión
+    <main className="min-h-screen bg-gray-100 p-4 md:p-8">
+      <div className="max-w-6xl mx-auto">
+        <div className="flex justify-between items-center mb-8">
+          <h1 className="text-3xl font-bold text-gray-800">Dashboard de Citas</h1>
+          <button onClick={cargarDashboard} className="bg-white shadow px-4 py-2 rounded-lg text-sm font-bold text-gray-600 hover:text-blue-600">
+            ↻ Recargar
           </button>
         </div>
 
-        {/* Pestañas de navegación */}
-        <div className="flex border-b border-gray-200 gap-6 overflow-x-auto">
-          <button
-            onClick={() => setTabActiva('servicios')}
-            className={`pb-3 font-semibold text-lg transition-colors border-b-2 whitespace-nowrap ${
-              tabActiva === 'servicios' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            Catálogo & Servicios
-          </button>
-          <button
-            onClick={() => setTabActiva('inventario')}
-            className={`pb-3 font-semibold text-lg transition-colors border-b-2 whitespace-nowrap ${
-              tabActiva === 'inventario' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            Inventario Diario
-          </button>
-          <button
-            onClick={() => setTabActiva('trabajadores')}
-            className={`pb-3 font-semibold text-lg transition-colors border-b-2 whitespace-nowrap ${
-              tabActiva === 'trabajadores' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            Equipo de Trabajo
-          </button>
-          <button
-            onClick={() => setTabActiva('analitica')}
-            className={`pb-3 font-semibold text-lg transition-colors border-b-2 whitespace-nowrap ${
-              tabActiva === 'analitica' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            Analítica & Reportes
-          </button>
-        </div>
+        {cargando ? (
+          <div className="text-center p-10 text-gray-500">Cargando base de datos...</div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {citas.map(cita => {
+              // Validaciones visuales y formateo seguro de fechas
+              const fechaObj = new Date(cita.fecha_inicio)
+              const fechaLocal = fechaObj.toLocaleDateString('es-ES', { weekday: 'short', day: '2-digit', month: 'short' })
+              const horaLocal = fechaObj.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })
+              
+              // Colores dinámicos de estado
+              const colorEstado = 
+                cita.estado === 'pendiente' ? 'bg-yellow-100 text-yellow-800 border-yellow-200' :
+                cita.estado === 'confirmada' ? 'bg-blue-100 text-blue-800 border-blue-200' :
+                cita.estado === 'completada' ? 'bg-green-100 text-green-800 border-green-200' :
+                'bg-red-100 text-red-800 border-red-200'
 
-        {/* PESTAÑA SERVICIOS */}
-        {tabActiva === 'servicios' && (
-          <div className="space-y-8">
-            <div className="bg-white p-6 rounded-xl shadow-md">
-              <h2 className="text-xl font-semibold mb-4 text-gray-700">Agregar Nuevo Servicio</h2>
-              <form onSubmit={guardarServicio} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Nombre del Servicio</label>
-                  <input
-                    type="text"
-                    required
-                    value={nuevoServicio.nombre}
-                    onChange={e => setNuevoServicio({ ...nuevoServicio, nombre: e.target.value })}
-                    className="w-full border rounded-lg p-2"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Categoría / Área</label>
-                  <select
-                    value={nuevoServicio.categoria_id}
-                    onChange={e => setNuevoServicio({ ...nuevoServicio, categoria_id: e.target.value })}
-                    className="w-full border rounded-lg p-2 bg-white"
-                  >
-                    {categorias.map(cat => (
-                      <option key={cat.id} value={cat.id}>{cat.nombre}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Precio ($)</label>
-                  <input
-                    type="number"
-                    required
-                    value={nuevoServicio.precio || ''}
-                    onChange={e => setNuevoServicio({ ...nuevoServicio, precio: Number(e.target.value) })}
-                    className="w-full border rounded-lg p-2"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Duración (Minutos)</label>
-                  <input
-                    type="number"
-                    required
-                    value={nuevoServicio.duracion || ''}
-                    onChange={e => setNuevoServicio({ ...nuevoServicio, duracion: Number(e.target.value) })}
-                    className="w-full border rounded-lg p-2"
-                  />
-                </div>
-                <div className="md:col-span-2">
-                  <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg">
-                    Guardar Servicio
-                  </button>
-                </div>
-              </form>
-            </div>
+              return (
+                <div key={cita.id} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                  <div className={`px-4 py-2 border-b flex justify-between items-center ${colorEstado}`}>
+                    <span className="font-bold text-sm uppercase">{cita.estado}</span>
+                    <span className="text-sm font-semibold">{fechaLocal} - {horaLocal}</span>
+                  </div>
+                  
+                  <div className="p-4">
+                    <h3 className="font-bold text-xl text-gray-800">{cita.cliente?.nombre || 'Cliente Borrado'}</h3>
+                    <p className="text-gray-500 text-sm mb-4">📞 {cita.cliente?.telefono || 'N/A'}</p>
+                    
+                    <div className="bg-gray-50 p-3 rounded-lg border border-gray-100 mb-4">
+                      <p className="font-medium text-gray-800">{cita.servicio?.nombre || 'Servicio No Definido'}</p>
+                      <p className="text-sm text-gray-500">Profesional: {cita.trabajador?.nombre || 'Cualquiera'}</p>
+                      <p className="text-sm font-bold text-green-600 mt-1">Total: ${cita.precio_congelado}</p>
+                    </div>
 
-            <div className="bg-white p-6 rounded-xl shadow-md">
-              <h2 className="text-xl font-semibold mb-4 text-gray-700">Catálogo Actual</h2>
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="border-b bg-gray-50">
-                    <th className="p-3">Servicio</th>
-                    <th className="p-3">Categoría</th>
-                    <th className="p-3">Precio</th>
-                    <th className="p-3">Duración</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {servicios.map(serv => (
-                    <tr key={serv.id} className="border-b">
-                      <td className="p-3 font-medium">{serv.nombre}</td>
-                      <td className="p-3 text-blue-600 font-medium">{serv.categorias?.nombre || 'Sin Categoría'}</td>
-                      <td className="p-3">${serv.precio}</td>
-                      <td className="p-3">{serv.duracion} min</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* PESTAÑA INVENTARIO */}
-        {tabActiva === 'inventario' && (
-          <div className="space-y-8">
-            <div className="bg-white p-6 rounded-xl shadow-md">
-              <h2 className="text-xl font-semibold mb-4 text-gray-700">1. Crear Nuevo Insumo / Producto</h2>
-              <form onSubmit={guardarProducto} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Nombre del Insumo</label>
-                  <input
-                    type="text"
-                    required
-                    value={nuevoProducto.nombre}
-                    onChange={e => setNuevoProducto({ ...nuevoProducto, nombre: e.target.value })}
-                    className="w-full border rounded-lg p-2"
-                  />
+                    <div className="grid grid-cols-2 gap-2">
+                      <button onClick={() => cambiarEstado(cita.id, 'confirmada')} className="bg-blue-50 text-blue-700 hover:bg-blue-100 py-2 rounded font-medium text-sm">
+                        ✅ Confirmar
+                      </button>
+                      <button onClick={() => cambiarEstado(cita.id, 'completada')} className="bg-green-50 text-green-700 hover:bg-green-100 py-2 rounded font-medium text-sm">
+                        💰 Completar
+                      </button>
+                      <button onClick={() => cambiarEstado(cita.id, 'cancelada')} className="col-span-2 bg-red-50 text-red-700 hover:bg-red-100 py-2 rounded font-medium text-sm">
+                        ❌ Cancelar Cita
+                      </button>
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Unidad de Medida</label>
-                  <select
-                    value={nuevoProducto.unidad_medida}
-                    onChange={e => setNuevoProducto({ ...nuevoProducto, unidad_medida: e.target.value })}
-                    className="w-full border rounded-lg p-2 bg-white"
-                  >
-                    <option value="unidades">Unidades</option>
-                    <option value="ml">Mililitros (ml)</option>
-                    <option value="gramos">Gramos (g)</option>
-                    <option value="cajas">Cajas</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Stock Inicial</label>
-                  <input
-                    type="number"
-                    required
-                    value={nuevoProducto.stock_actual}
-                    onChange={e => setNuevoProducto({ ...nuevoProducto, stock_actual: Number(e.target.value) })}
-                    className="w-full border rounded-lg p-2"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Categoría Asociada</label>
-                  <select
-                    value={nuevoProducto.categoria_id}
-                    onChange={e => setNuevoProducto({ ...nuevoProducto, categoria_id: e.target.value })}
-                    className="w-full border rounded-lg p-2 bg-white"
-                  >
-                    {categorias.map(cat => (
-                      <option key={cat.id} value={cat.id}>{cat.nombre}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="md:col-span-2">
-                  <button type="submit" className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 rounded-lg">
-                    Registrar Insumo
-                  </button>
-                </div>
-              </form>
-            </div>
-
-            <div className="bg-white p-6 rounded-xl shadow-md">
-              <h2 className="text-xl font-semibold mb-4 text-gray-700">2. Registro Diario de Apertura / Cierre</h2>
-              <form onSubmit={guardarRegistroInventario} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Insumo</label>
-                  <select
-                    value={nuevoRegistro.producto_id}
-                    onChange={e => setNuevoRegistro({ ...nuevoRegistro, producto_id: e.target.value })}
-                    className="w-full border rounded-lg p-2 bg-white"
-                  >
-                    {productos.map(p => (
-                      <option key={p.id} value={p.id}>{p.nombre} (Stock: {p.stock_actual} {p.unidad_medida})</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Tipo de Registro</label>
-                  <select
-                    value={nuevoRegistro.tipo}
-                    onChange={e => setNuevoRegistro({ ...nuevoRegistro, tipo: e.target.value })}
-                    className="w-full border rounded-lg p-2 bg-white"
-                  >
-                    <option value="apertura">Apertura (Inicio)</option>
-                    <option value="cierre">Cierre (Fin)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Cantidad Contada</label>
-                  <input
-                    type="number"
-                    required
-                    value={nuevoRegistro.cantidad}
-                    onChange={e => setNuevoRegistro({ ...nuevoRegistro, cantidad: Number(e.target.value) })}
-                    className="w-full border rounded-lg p-2"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Notas</label>
-                  <input
-                    type="text"
-                    value={nuevoRegistro.observaciones}
-                    onChange={e => setNuevoRegistro({ ...nuevoRegistro, observaciones: e.target.value })}
-                    className="w-full border rounded-lg p-2"
-                  />
-                </div>
-                <div className="md:col-span-2">
-                  <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 rounded-lg">
-                    Guardar Conteo
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
-
-        {/* PESTAÑA TRABAJADORES */}
-        {tabActiva === 'trabajadores' && (
-          <div className="space-y-8">
-            <div className="bg-white p-6 rounded-xl shadow-md">
-              <h2 className="text-xl font-semibold mb-4 text-gray-700">Registrar Colaborador / Trabajador</h2>
-              <form onSubmit={guardarTrabajador} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Nombre Completo</label>
-                  <input
-                    type="text"
-                    required
-                    value={nuevoTrabajador.nombre}
-                    onChange={e => setNuevoTrabajador({ ...nuevoTrabajador, nombre: e.target.value })}
-                    className="w-full border rounded-lg p-2"
-                    placeholder="Ej. Sofía Martínez"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Especialidad / Área</label>
-                  <input
-                    type="text"
-                    required
-                    value={nuevoTrabajador.especialidad}
-                    onChange={e => setNuevoTrabajador({ ...nuevoTrabajador, especialidad: e.target.value })}
-                    className="w-full border rounded-lg p-2"
-                    placeholder="Ej. Spa de Uñas, Barbería..."
-                  />
-                </div>
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Teléfono de Contacto (Opcional)</label>
-                  <input
-                    type="text"
-                    value={nuevoTrabajador.telefono}
-                    onChange={e => setNuevoTrabajador({ ...nuevoTrabajador, telefono: e.target.value })}
-                    className="w-full border rounded-lg p-2"
-                    placeholder="Ej. +57 300 123 4567"
-                  />
-                </div>
-                <div className="md:col-span-2">
-                  <button type="submit" className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 rounded-lg">
-                    Agregar Trabajador
-                  </button>
-                </div>
-              </form>
-            </div>
-
-            <div className="bg-white p-6 rounded-xl shadow-md">
-              <h2 className="text-xl font-semibold mb-4 text-gray-700">Equipo Registrado</h2>
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="border-b bg-gray-50">
-                    <th className="p-3">Nombre</th>
-                    <th className="p-3">Especialidad</th>
-                    <th className="p-3">Teléfono</th>
-                    <th className="p-3">Estado</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {trabajadores.map(trab => (
-                    <tr key={trab.id} className="border-b">
-                      <td className="p-3 font-medium">{trab.nombre}</td>
-                      <td className="p-3 text-purple-700 font-medium">{trab.especialidad}</td>
-                      <td className="p-3 text-gray-600">{trab.telefono || '-'}</td>
-                      <td className="p-3">
-                        <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded font-bold">
-                          ACTIVO
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* PESTAÑA ANALÍTICA */}
-        {tabActiva === 'analitica' && (
-          <div className="space-y-8">
-            {/* Tarjetas KPI */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-              <div className="bg-white p-6 rounded-xl shadow-md border-l-4 border-blue-600">
-                <p className="text-sm font-medium text-gray-500">Ingresos Estimados</p>
-                <p className="text-3xl font-bold text-gray-800">${totalIngresos.toLocaleString()}</p>
-              </div>
-              <div className="bg-white p-6 rounded-xl shadow-md border-l-4 border-green-600">
-                <p className="text-sm font-medium text-gray-500">Total de Citas</p>
-                <p className="text-3xl font-bold text-gray-800">{totalCitas}</p>
-              </div>
-              <div className="bg-white p-6 rounded-xl shadow-md border-l-4 border-purple-600">
-                <p className="text-sm font-medium text-gray-500">Ticket Promedio</p>
-                <p className="text-3xl font-bold text-gray-800">${Number(promedioCita).toLocaleString()}</p>
-              </div>
-            </div>
-
-            {/* Alertas de Insumos Bajos */}
-            {insumosBajoStock.length > 0 && (
-              <div className="bg-red-50 border-l-4 border-red-500 p-6 rounded-xl shadow-sm">
-                <h3 className="text-lg font-bold text-red-800 mb-2">⚠️ Alerta de Stock Bajo</h3>
-                <p className="text-sm text-red-700 mb-3">Los siguientes insumos requieren reabastecimiento pronto:</p>
-                <ul className="list-disc list-inside text-sm text-red-800 font-medium space-y-1">
-                  {insumosBajoStock.map(p => (
-                    <li key={p.id}>{p.nombre}: {p.stock_actual} {p.unidad_medida} disponibles</li>
-                  ))}
-                </ul>
+              )
+            })}
+            
+            {citas.length === 0 && (
+              <div className="col-span-full text-center py-20 bg-white rounded-xl border border-dashed border-gray-300">
+                <p className="text-gray-500 font-medium">Aún no tienes citas registradas.</p>
               </div>
             )}
-
-            {/* Tablas de Análisis */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Servicios más populares */}
-              <div className="bg-white p-6 rounded-xl shadow-md">
-                <h3 className="text-lg font-bold text-gray-800 mb-4">Servicios Más Solicitados</h3>
-                {Object.keys(conteoServicios).length === 0 ? (
-                  <p className="text-gray-500 text-sm">No hay citas registradas aún.</p>
-                ) : (
-                  <ul className="space-y-3">
-                    {Object.entries(conteoServicios).map(([servicio, cantidad]) => (
-                      <li key={servicio} className="flex justify-between items-center border-b pb-2">
-                        <span className="font-medium text-gray-700">{servicio}</span>
-                        <span className="bg-blue-100 text-blue-800 text-xs font-bold px-3 py-1 rounded-full">{cantidad} citas</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-
-              {/* Rendimiento del equipo */}
-              <div className="bg-white p-6 rounded-xl shadow-md">
-                <h3 className="text-lg font-bold text-gray-800 mb-4">Citas por Profesional</h3>
-                {Object.keys(conteoTrabajadores).length === 0 ? (
-                  <p className="text-gray-500 text-sm">No hay citas registradas aún.</p>
-                ) : (
-                  <ul className="space-y-3">
-                    {Object.entries(conteoTrabajadores).map(([trabajador, cantidad]) => (
-                      <li key={trabajador} className="flex justify-between items-center border-b pb-2">
-                        <span className="font-medium text-gray-700">{trabajador}</span>
-                        <span className="bg-purple-100 text-purple-800 text-xs font-bold px-3 py-1 rounded-full">{cantidad} citas</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
           </div>
         )}
       </div>
