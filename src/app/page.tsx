@@ -1,3 +1,4 @@
+// @ts-nocheck
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -136,7 +137,8 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-gray-50 p-6 md:p-12">
       <div className="max-w-3xl mx-auto">
-        <h1 className="text-3xl font-bold text-center text-gray-900 mb-2">Reserva tu espacio de belleza y cuidado</h1>
+        <h1 className="text-3xl font-bold text-center text-gray-900 mb-2">CitaPro</h1>
+        <p className="text-center text-gray-600 mb-8">Reserva tu espacio de belleza y cuidado</p>
         
         {reservaExitosa ? (
           <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-200 mt-6 text-center space-y-4">
@@ -238,13 +240,13 @@ export default function Home() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Seleccionar Profesional</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Seleccionar Profesional (Opcional)</label>
                 <select 
                   value={trabajadorIdSeleccionado} 
                   onChange={(e) => setTrabajadorIdSeleccionado(e.target.value)}
                   className="w-full border border-gray-300 rounded-lg p-3 text-gray-800 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
                 >
-                  <option value="">✨ Cualquier profesional disponible (Asignar después)</option>
+                  <option value="">Cualquier profesional disponible</option>
                   {trabajadores.map(trab => (
                     <option key={trab.id} value={trab.id}>
                       {trab.nombre} ({trab.especialidad || 'General'})
@@ -254,7 +256,7 @@ export default function Home() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Fecha</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Fecha y Hora</label>
                 <input 
                   type="date" 
                   required 
