@@ -1,27 +1,21 @@
 import { supabase } from '@/lib/supabase';
 
-export async function obtenerDisponibilidad(
-  trabajadorId,
-  fechaSeleccionada,
-  duracionMinutos
-) {
-  // 1. Obtener la hora actual EXACTA en Bogotá, Colombia
-  // Esto ignora la hora del PC del usuario y usa el estándar de Bogotá
-  const horaBogotaStr = new Date().toLocaleString("en-US", {timeZone: "America/Bogota"});
-  const ahoraBogota = new Date(horaBogotaStr);
-  
-  // Extraer componentes de la fecha actual en Bogotá
-  const anioActual = ahoraBogota.getFullYear();
-  const mesActual = ahoraBogota.getMonth();
-  const diaActual = ahoraBogota.getDate();
-  const horaActual = ahoraBogota.getHours();
-  const minActual = ahoraBogota.getMinutes();
+export async function obtenerDisponibilidad(trabajadorId, fechaSeleccionada, duracionMinutos) {
+  // 1. Obtener hora actual estandarizada en Bogotá (-05:00)
+  const ahoraBogota = new Date(
+    new Date().toLocaleString('en-US', { timeZone: 'America/Bogota' })
+  );
 
-  // 2. Definir rango del día seleccionado
-  const inicioDia = `${fechaSeleccionada}T00:00:00`;
-  const finDia = `${fechaSeleccionada}T23:59:59`;
+  const [anioSel, mesSel, diaSel] = fechaSeleccionada.split('-').map(Number);
+  const esHoy =
+    anioSel === ahoraBogota.getFullYear() &&
+    mesSel === ahoraBogota.getMonth() + 1 &&
+    diaSel === ahoraBogota.getDate();
 
-  // 3. Consultar citas ocupadas
+  // 2. Consulta de citas del día
+  const inicioDia = `${fechaSeleccionada}T00:00:00.000Z`;
+  const finDia = `${fechaSeleccionada}T23:59:59.999Z`;
+
   let query = supabase
     .from('citas')
     .select('fecha_inicio, fecha_fin, trabajador_id')
@@ -34,9 +28,12 @@ export async function obtenerDisponibilidad(
   }
 
   const { data: citasExistentes, error } = await query;
-  if (error) { console.error('Error:', error); return []; }
+  if (error) {
+    console.error('Error al consultar citas:', error);
+    return [];
+  }
 
-  // 4. Generar horas posibles
+  // 3. Generar franjas horarias (08:00 a 18:00)
   const horasPosibles = [];
   const horaInicioJornada = 8;
   const horaFinJornada = 18;
@@ -44,29 +41,18 @@ export async function obtenerDisponibilidad(
 
   for (let h = horaInicioJornada; h < horaFinJornada; h++) {
     for (let m = 0; m < 60; m += intervaloMinutos) {
-      const horaStr = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
-      
-      // Lógica de filtrado con HORA BOGOTÁ
-      const [y, mm, d] = fechaSeleccionada.split('-').map(Number);
-      
-      // ¿Es hoy en Bogotá?
-      const esHoy = (y === anioActual && mm === (mesActual + 1) && d === diaActual);
-      
-      // Si es hoy, bloqueamos si la hora generada es anterior a la hora de Bogotá actual
       if (esHoy) {
-        if (h < horaActual || (h === horaActual && m <= minActual)) {
-          continue; // Esta hora ya pasó en Bogotá
+        if (h < ahoraBogota.getHours() || (h === ahoraBogota.getHours() && m <= ahoraBogota.getMinutes())) {
+          continue; // Omitir horas pasadas hoy en Bogotá
         }
       }
-
-      horasPosibles.push(horaStr);
+      horasPosibles.push(`${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`);
     }
   }
 
-  // 5. Filtrar conflictos
+  // 4. Filtrar conflictos comparando milisegundos reales
   return horasPosibles.filter((hora) => {
-    const [y, mm, d] = fechaSeleccionada.split('-').map(Number);
-    const inicioSlot = new Date(y, mm - 1, d, parseInt(hora.split(':')[0]), parseInt(hora.split(':')[1])).getTime();
+    const inicioSlot = new Date(`${fechaSeleccionada}T${hora}:00-05:00`).getTime();
     const finSlot = inicioSlot + duracionMinutos * 60000;
 
     const hayConflicto = citasExistentes?.some((cita) => {

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { useRouter } from 'next/navigation'
 
 interface Trabajador {
   id: string
@@ -48,6 +49,7 @@ export default function AdminDashboard() {
   const [sesion, setSesion] = useState<any>(null)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const router = useRouter()
   
   const [pestanaActiva, setPestanaActiva] = useState<'citas' | 'servicios' | 'trabajadores' | 'analitica'>('citas')
 
@@ -72,16 +74,51 @@ export default function AdminDashboard() {
   const [cargando, setCargando] = useState(false)
   const [cargandoAuth, setCargandoAuth] = useState(true)
 
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSesion(session)
-      if (session) cargarDatosGenerales()
-      setCargandoAuth(false)
-    })
+  // ESTADOS PARA FILTROS Y PAGINACIÓN
+  const [filtroEstado, setFiltroEstado] = useState('todos')
+  const [filtroFecha, setFiltroFecha] = useState('todas')
+  const [paginaActual, setPaginaActual] = useState(1)
+  const citasPorPagina = 9
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSesion(session)
-      if (session) cargarDatosGenerales()
+  useEffect(() => {
+    setPaginaActual(1)
+  }, [filtroEstado, filtroFecha])
+
+  useEffect(() => {
+    async function verificarAccesoAdmin() {
+      const { data: { user }, error } = await supabase.auth.getUser()
+
+      if (error || !user) {
+        setSesion(null)
+      } else if (user.user_metadata?.role !== 'admin') {
+        alert('Acceso denegado: Se requiere perfil de administrador.')
+        await supabase.auth.signOut()
+        setSesion(null)
+      } else {
+        const { data: { session } } = await supabase.auth.getSession()
+        setSesion(session)
+        if (session) cargarDatosGenerales()
+      }
+      setCargandoAuth(false)
+    }
+
+    verificarAccesoAdmin()
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (session) {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (user?.user_metadata?.role !== 'admin') {
+          alert('Acceso denegado: Se requiere perfil de administrador.')
+          await supabase.auth.signOut()
+          setSesion(null)
+        } else {
+          setSesion(session)
+          cargarDatosGenerales()
+        }
+      } else {
+        setSesion(null)
+        setCitas([])
+      }
     })
 
     return () => subscription.unsubscribe()
@@ -134,8 +171,22 @@ export default function AdminDashboard() {
 
   async function manejarLogin(e: React.FormEvent) {
     e.preventDefault()
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) alert('Error al iniciar sesión: ' + error.message)
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+    
+    if (error) {
+      alert('Error al iniciar sesión: ' + error.message)
+      return
+    }
+
+    const user = data.user
+    if (user?.user_metadata?.role !== 'admin') {
+      alert('Acceso denegado: Esta cuenta no tiene permisos de administrador.')
+      await supabase.auth.signOut()
+      setSesion(null)
+    } else {
+      setSesion(data.session)
+      cargarDatosGenerales()
+    }
   }
 
   async function cerrarSesion() {
@@ -235,7 +286,7 @@ export default function AdminDashboard() {
   }
 
   if (cargandoAuth) {
-    return <div className="text-center py-20 text-gray-500">Verificando sesión...</div>
+    return <div className="text-center py-20 text-gray-500">Verificando sesión y seguridad...</div>
   }
 
   if (!sesion) {
@@ -243,7 +294,7 @@ export default function AdminDashboard() {
         <main className="min-h-screen bg-gray-100 flex items-center justify-center p-6">
           <div className="bg-white p-8 rounded-2xl shadow-md max-w-sm w-full">
             <h1 className="text-2xl font-bold text-center text-gray-800 mb-2">CitaPro Admin</h1>
-            <p className="text-center text-gray-500 mb-6 text-sm">Inicia sesión con tus credenciales</p>
+            <p className="text-center text-gray-500 mb-6 text-sm">Inicia sesión con credenciales de administrador</p>
             
             <form onSubmit={manejarLogin} className="space-y-4">
               <div>
@@ -252,7 +303,7 @@ export default function AdminDashboard() {
                   type="email" 
                   value={email} 
                   onChange={e => setEmail(e.target.value)} 
-                  className="w-full border rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-600"
+                  className="w-full border rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-600 bg-white text-gray-900"
                   required
                 />
               </div>
@@ -262,7 +313,7 @@ export default function AdminDashboard() {
                   type="password" 
                   value={password} 
                   onChange={e => setPassword(e.target.value)} 
-                  className="w-full border rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-600"
+                  className="w-full border rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-600 bg-white text-gray-900"
                   required
                 />
               </div>
@@ -278,7 +329,36 @@ export default function AdminDashboard() {
       )
   }
 
-  // Cálculos analíticos avanzados
+  // LÓGICA DE FILTRADO DE CITAS
+  const hoyObj = new Date();
+  hoyObj.setHours(0, 0, 0, 0);
+  const mananaObj = new Date(hoyObj);
+  mananaObj.setDate(mananaObj.getDate() + 1);
+  const en7DiasObj = new Date(hoyObj);
+  en7DiasObj.setDate(en7DiasObj.getDate() + 7);
+
+  const citasFiltradas = citas.filter(cita => {
+    if (filtroEstado !== 'todos' && cita.estado !== filtroEstado) return false;
+
+    if (filtroFecha !== 'todas') {
+      const fechaCita = new Date(cita.fecha_inicio);
+      fechaCita.setHours(0, 0, 0, 0);
+
+      if (filtroFecha === 'hoy' && fechaCita.getTime() !== hoyObj.getTime()) return false;
+      if (filtroFecha === 'manana' && fechaCita.getTime() !== mananaObj.getTime()) return false;
+      if (filtroFecha === 'proximos_7' && (fechaCita < hoyObj || fechaCita > en7DiasObj)) return false;
+      if (filtroFecha === 'pasadas' && fechaCita >= hoyObj) return false;
+    }
+
+    return true;
+  });
+
+  // LÓGICA DE PAGINACIÓN DE CITAS
+  const totalPaginas = Math.ceil(citasFiltradas.length / citasPorPagina) || 1;
+  const indiceInicio = (paginaActual - 1) * citasPorPagina;
+  const citasPaginadas = citasFiltradas.slice(indiceInicio, indiceInicio + citasPorPagina);
+
+  // Cálculos analíticos
   const totalCitas = citas.length
   const citasCompletadas = citas.filter(c => c.estado === 'completada').length
   const citasConfirmadas = citas.filter(c => c.estado === 'confirmada').length
@@ -297,7 +377,6 @@ export default function AdminDashboard() {
   const tasaCancelacion = totalCitas > 0 ? ((citasCanceladas / totalCitas) * 100).toFixed(1) : '0'
   const ticketPromedio = totalCitas > 0 ? (ingresosEstimados / totalCitas).toFixed(0) : '0'
 
-  // Servicio más solicitado
   const conteoServicios: { [key: string]: number } = {}
   citas.forEach(c => {
     if (c.servicios?.nombre) {
@@ -332,44 +411,116 @@ export default function AdminDashboard() {
         ) : (
           <>
             {pestanaActiva === 'citas' && (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {citas.map(cita => {
-                  const fechaFormateada = new Date(cita.fecha_inicio).toLocaleString('es-ES', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
-                  const estaBloqueada = cita.estado === 'cancelada' || cita.estado === 'completada'
-                  let colorEstado = 'bg-gray-100 text-gray-800 border-gray-200'
-                  if (cita.estado === 'confirmada') colorEstado = 'bg-blue-50 text-blue-700 border-blue-200'
-                  if (cita.estado === 'completada') colorEstado = 'bg-green-50 text-green-700 border-green-200'
-                  if (cita.estado === 'cancelada') colorEstado = 'bg-red-50 text-red-700 border-red-200'
-                  if (cita.estado === 'pendiente') colorEstado = 'bg-amber-50 text-amber-700 border-amber-200'
-                  return (
-                    <div key={cita.id} className={`bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col justify-between ${estaBloqueada ? 'opacity-80 bg-gray-50' : ''}`}>
-                      <div>
-                        <div className={`px-5 py-3 border-b flex justify-between items-center text-xs font-bold uppercase tracking-wider ${colorEstado}`}>
-                          <span>{cita.estado} {estaBloqueada && '🔒'}</span>
-                          <span>{fechaFormateada}</span>
-                        </div>
-                        <div className="p-5 space-y-3">
-                          <h3 className="font-bold text-lg text-gray-900">{cita.clientes?.nombre || 'Cliente'}</h3>
-                          <p className="text-gray-500 text-sm flex items-center gap-1">📞 {cita.clientes?.telefono || 'Sin teléfono'}</p>
-                          <div className="bg-gray-50 p-3 rounded-xl border border-gray-100 space-y-2">
-                            <p className="font-bold text-gray-800">{cita.servicios?.nombre || 'Servicio'}</p>
-                            <label className="text-xs text-gray-500 font-medium block">Profesional:</label>
-                            <select value={cita.trabajador_id || ''} onChange={(e) => cambiarTrabajadorCita(cita.id, e.target.value)} disabled={estaBloqueada} className="w-full text-xs border rounded-lg p-1.5 bg-white text-gray-700">
-                                <option value="">Disponible</option>
-                                {trabajadores.map(trab => (<option key={trab.id} value={trab.id}>{trab.nombre} ({trab.especialidad})</option>))}
-                            </select>
-                            <p className="text-emerald-600 font-bold text-sm">Total: ${cita.precio_congelado}</p>
+              <div>
+                {/* BARRA DE FILTROS CON ESTILOS CORREGIDOS */}
+                <div className="flex flex-col md:flex-row gap-4 mb-6 bg-white p-4 rounded-2xl shadow-sm border border-gray-200">
+                  <div className="flex-1">
+                    <label className="text-xs text-gray-500 font-bold uppercase mb-1 block">Filtrar por Estado</label>
+                    <select 
+                      value={filtroEstado} 
+                      onChange={e => setFiltroEstado(e.target.value)} 
+                      className="w-full border border-gray-300 rounded-xl p-2.5 text-sm bg-white text-gray-900 font-medium outline-none focus:ring-2 focus:ring-blue-600"
+                    >
+                      <option value="todos" className="text-gray-900 bg-white">Todos los estados</option>
+                      <option value="pendiente" className="text-gray-900 bg-white">Pendientes</option>
+                      <option value="confirmada" className="text-gray-900 bg-white">Confirmadas</option>
+                      <option value="completada" className="text-gray-900 bg-white">Completadas</option>
+                      <option value="cancelada" className="text-gray-900 bg-white">Canceladas</option>
+                    </select>
+                  </div>
+                  <div className="flex-1">
+                    <label className="text-xs text-gray-500 font-bold uppercase mb-1 block">Filtrar por Fecha</label>
+                    <select 
+                      value={filtroFecha} 
+                      onChange={e => setFiltroFecha(e.target.value)} 
+                      className="w-full border border-gray-300 rounded-xl p-2.5 text-sm bg-white text-gray-900 font-medium outline-none focus:ring-2 focus:ring-blue-600"
+                    >
+                      <option value="todas" className="text-gray-900 bg-white">Cualquier fecha</option>
+                      <option value="hoy" className="text-gray-900 bg-white">Hoy</option>
+                      <option value="manana" className="text-gray-900 bg-white">Mañana</option>
+                      <option value="proximos_7" className="text-gray-900 bg-white">Próximos 7 días</option>
+                      <option value="pasadas" className="text-gray-900 bg-white">Citas Pasadas</option>
+                    </select>
+                  </div>
+                  <div className="flex items-end">
+                    <p className="text-sm text-gray-500 font-medium pb-2">Mostrando {citasFiltradas.length} resultados</p>
+                  </div>
+                </div>
+
+                {/* GRID DE CITAS PAGINADAS */}
+                {citasPaginadas.length === 0 ? (
+                  <div className="text-center py-10 bg-white rounded-2xl border border-gray-200 text-gray-500">
+                    No se encontraron citas con estos filtros.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {citasPaginadas.map(cita => {
+                    const fechaFormateada = new Date(cita.fecha_inicio).toLocaleString('es-ES', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+                    const estaBloqueada = cita.estado === 'cancelada' || cita.estado === 'completada'
+                    let colorEstado = 'bg-gray-100 text-gray-800 border-gray-200'
+                    if (cita.estado === 'confirmada') colorEstado = 'bg-blue-50 text-blue-700 border-blue-200'
+                    if (cita.estado === 'completada') colorEstado = 'bg-green-50 text-green-700 border-green-200'
+                    if (cita.estado === 'cancelada') colorEstado = 'bg-red-50 text-red-700 border-red-200'
+                    if (cita.estado === 'pendiente') colorEstado = 'bg-amber-50 text-amber-700 border-amber-200'
+                    return (
+                      <div key={cita.id} className={`bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col justify-between ${estaBloqueada ? 'opacity-80 bg-gray-50' : ''}`}>
+                        <div>
+                          <div className={`px-5 py-3 border-b flex justify-between items-center text-xs font-bold uppercase tracking-wider ${colorEstado}`}>
+                            <span>{cita.estado} {estaBloqueada && '🔒'}</span>
+                            <span>{fechaFormateada}</span>
+                          </div>
+                          <div className="p-5 space-y-3">
+                            <h3 className="font-bold text-lg text-gray-900">{cita.clientes?.nombre || 'Cliente'}</h3>
+                            <p className="text-gray-500 text-sm flex items-center gap-1">📞 {cita.clientes?.telefono || 'Sin teléfono'}</p>
+                            <div className="bg-gray-50 p-3 rounded-xl border border-gray-100 space-y-2">
+                              <p className="font-bold text-gray-800">{cita.servicios?.nombre || 'Servicio'}</p>
+                              <label className="text-xs text-gray-500 font-medium block">Profesional:</label>
+                              <select 
+                                value={cita.trabajador_id || ''} 
+                                onChange={(e) => cambiarTrabajadorCita(cita.id, e.target.value)} 
+                                disabled={estaBloqueada} 
+                                className="w-full text-xs border rounded-lg p-1.5 bg-white text-gray-900 font-medium"
+                              >
+                                <option value="" className="text-gray-900 bg-white">Disponible</option>
+                                {trabajadores.map(trab => (<option key={trab.id} value={trab.id} className="text-gray-900 bg-white">{trab.nombre} ({trab.especialidad})</option>))}
+                              </select>
+                              <p className="text-emerald-600 font-bold text-sm">Total: ${cita.precio_congelado}</p>
+                            </div>
                           </div>
                         </div>
+                        <div className="p-4 bg-gray-50 border-t border-gray-100 grid grid-cols-3 gap-2">
+                          <button onClick={() => actualizarEstadoCita(cita.id, 'confirmada')} disabled={estaBloqueada} className={`text-white text-xs font-bold py-2 rounded-lg flex items-center justify-center gap-1 ${estaBloqueada ? 'bg-gray-300' : 'bg-blue-600 hover:bg-blue-700'}`}>✅ Confirmar</button>
+                          <button onClick={() => actualizarEstadoCita(cita.id, 'completada')} disabled={estaBloqueada} className={`text-white text-xs font-bold py-2 rounded-lg flex items-center justify-center gap-1 ${estaBloqueada ? 'bg-gray-300' : 'bg-emerald-600 hover:bg-emerald-700'}`}>💰 Completar</button>
+                          <button onClick={() => actualizarEstadoCita(cita.id, 'cancelada')} disabled={estaBloqueada} className={`text-white text-xs font-bold py-2 rounded-lg flex items-center justify-center gap-1 ${estaBloqueada ? 'bg-gray-300' : 'bg-red-600 hover:bg-red-700'}`}>❌ Cancelar</button>
+                        </div>
                       </div>
-                      <div className="p-4 bg-gray-50 border-t border-gray-100 grid grid-cols-3 gap-2">
-                        <button onClick={() => actualizarEstadoCita(cita.id, 'confirmada')} disabled={estaBloqueada} className={`text-white text-xs font-bold py-2 rounded-lg flex items-center justify-center gap-1 ${estaBloqueada ? 'bg-gray-300' : 'bg-blue-600 hover:bg-blue-700'}`}>✅ Confirmar</button>
-                        <button onClick={() => actualizarEstadoCita(cita.id, 'completada')} disabled={estaBloqueada} className={`text-white text-xs font-bold py-2 rounded-lg flex items-center justify-center gap-1 ${estaBloqueada ? 'bg-gray-300' : 'bg-emerald-600 hover:bg-emerald-700'}`}>💰 Completar</button>
-                        <button onClick={() => actualizarEstadoCita(cita.id, 'cancelada')} disabled={estaBloqueada} className={`text-white text-xs font-bold py-2 rounded-lg flex items-center justify-center gap-1 ${estaBloqueada ? 'bg-gray-300' : 'bg-red-600 hover:bg-red-700'}`}>❌ Cancelar</button>
-                      </div>
-                    </div>
-                  )
-                })}
+                    )
+                  })}
+                  </div>
+                )}
+
+                {/* CONTROLES DE PAGINACIÓN */}
+                {totalPaginas > 1 && (
+                  <div className="flex justify-between items-center mt-6 bg-white p-4 rounded-2xl shadow-sm border border-gray-200">
+                    <button
+                      onClick={() => setPaginaActual(p => Math.max(1, p - 1))}
+                      disabled={paginaActual === 1}
+                      className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl disabled:opacity-50 text-sm font-bold transition-colors"
+                    >
+                      ← Anterior
+                    </button>
+                    <span className="text-sm text-gray-600 font-bold">
+                      Página {paginaActual} de {totalPaginas}
+                    </span>
+                    <button
+                      onClick={() => setPaginaActual(p => Math.min(totalPaginas, p + 1))}
+                      disabled={paginaActual === totalPaginas}
+                      className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl disabled:opacity-50 text-sm font-bold transition-colors"
+                    >
+                      Siguiente →
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -378,11 +529,15 @@ export default function AdminDashboard() {
                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
                   <h2 className="text-xl font-bold text-gray-800 mb-4">Agregar Nuevo Servicio</h2>
                   <form onSubmit={registrarServicio} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
-                    <input type="text" placeholder="Nombre" value={nuevoServicioNombre} onChange={e => setNuevoServicioNombre(e.target.value)} className="w-full border rounded-xl p-2.5 text-sm" required />
-                    <input type="number" placeholder="Precio" value={nuevoServicioPrecio} onChange={e => setNuevoServicioPrecio(e.target.value)} className="w-full border rounded-xl p-2.5 text-sm" required />
-                    <input type="number" placeholder="Minutos" value={nuevoServicioDuracion} onChange={e => setNuevoServicioDuracion(e.target.value)} className="w-full border rounded-xl p-2.5 text-sm" required />
-                    <select value={nuevoServicioCategoria} onChange={e => setNuevoServicioCategoria(e.target.value)} className="w-full border rounded-xl p-2.5 text-sm bg-white">
-                        {categorias.map(cat => (<option key={cat.id} value={cat.id}>{cat.nombre}</option>))}
+                    <input type="text" placeholder="Nombre" value={nuevoServicioNombre} onChange={e => setNuevoServicioNombre(e.target.value)} className="w-full border rounded-xl p-2.5 text-sm bg-white text-gray-900" required />
+                    <input type="number" placeholder="Precio" value={nuevoServicioPrecio} onChange={e => setNuevoServicioPrecio(e.target.value)} className="w-full border rounded-xl p-2.5 text-sm bg-white text-gray-900" required />
+                    <input type="number" placeholder="Minutos" value={nuevoServicioDuracion} onChange={e => setNuevoServicioDuracion(e.target.value)} className="w-full border rounded-xl p-2.5 text-sm bg-white text-gray-900" required />
+                    <select 
+                      value={nuevoServicioCategoria} 
+                      onChange={e => setNuevoServicioCategoria(e.target.value)} 
+                      className="w-full border rounded-xl p-2.5 text-sm bg-white text-gray-900 font-medium"
+                    >
+                      {categorias.map(cat => (<option key={cat.id} value={cat.id} className="text-gray-900 bg-white">{cat.nombre}</option>))}
                     </select>
                     <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-4 rounded-xl text-sm transition-colors">Guardar</button>
                   </form>
@@ -395,9 +550,9 @@ export default function AdminDashboard() {
                       <div key={serv.id} className="py-4 flex flex-wrap justify-between items-center gap-4">
                         {editandoServicioId === serv.id ? (
                             <div className="flex flex-wrap gap-2 flex-grow">
-                                <input className="border rounded px-2 py-1 text-sm w-32" value={editNombre} onChange={e => setEditNombre(e.target.value)} />
-                                <input className="border rounded px-2 py-1 text-sm w-20" type="number" value={editPrecio} onChange={e => setEditPrecio(e.target.value)} />
-                                <input className="border rounded px-2 py-1 text-sm w-20" type="number" value={editDuracion} onChange={e => setEditDuracion(e.target.value)} />
+                                <input className="border rounded px-2 py-1 text-sm w-32 bg-white text-gray-900" value={editNombre} onChange={e => setEditNombre(e.target.value)} />
+                                <input className="border rounded px-2 py-1 text-sm w-20 bg-white text-gray-900" type="number" value={editPrecio} onChange={e => setEditPrecio(e.target.value)} />
+                                <input className="border rounded px-2 py-1 text-sm w-20 bg-white text-gray-900" type="number" value={editDuracion} onChange={e => setEditDuracion(e.target.value)} />
                                 <button onClick={() => guardarEdicionServicio(serv.id)} className="bg-green-600 text-white px-3 py-1 rounded text-xs font-bold">Guardar</button>
                                 <button onClick={() => setEditandoServicioId(null)} className="bg-gray-400 text-white px-3 py-1 rounded text-xs">X</button>
                             </div>
@@ -423,8 +578,8 @@ export default function AdminDashboard() {
                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
                   <h2 className="text-xl font-bold text-gray-800 mb-4">Registrar Profesional</h2>
                   <form onSubmit={registrarTrabajador} className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
-                    <input type="text" placeholder="Nombre" value={nuevoTrabajadorNombre} onChange={e => setNuevoTrabajadorNombre(e.target.value)} className="w-full border rounded-xl p-2.5 text-sm" required />
-                    <input type="text" placeholder="Especialidad" value={nuevoTrabajadorEspecialidad} onChange={e => setNuevoTrabajadorEspecialidad(e.target.value)} className="w-full border rounded-xl p-2.5 text-sm" required />
+                    <input type="text" placeholder="Nombre" value={nuevoTrabajadorNombre} onChange={e => setNuevoTrabajadorNombre(e.target.value)} className="w-full border rounded-xl p-2.5 text-sm bg-white text-gray-900" required />
+                    <input type="text" placeholder="Especialidad" value={nuevoTrabajadorEspecialidad} onChange={e => setNuevoTrabajadorEspecialidad(e.target.value)} className="w-full border rounded-xl p-2.5 text-sm bg-white text-gray-900" required />
                     <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-4 rounded-xl text-sm transition-colors">Agregar</button>
                   </form>
                 </div>
@@ -452,7 +607,6 @@ export default function AdminDashboard() {
 
             {pestanaActiva === 'analitica' && (
               <div className="space-y-6">
-                {/* Resumen Principal Financiero y de Volumen */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                   <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
                     <p className="text-sm text-gray-500 font-medium">Total de Citas</p>
@@ -467,37 +621,53 @@ export default function AdminDashboard() {
                     <p className="text-3xl font-bold text-blue-600 mt-2">{tasaExito}%</p>
                   </div>
                   <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-                    <p className="text-sm text-gray-500 font-medium">Ingresos Estimados (Conf. + Comp.)</p>
-                    <p className="text-3xl font-bold text-green-600 mt-2">${ingresosEstimados}</p>
+                    <p className="text-sm text-gray-500 font-medium">Ingresos Reales</p>
+                    <p className="text-3xl font-bold text-emerald-600 mt-2">${ingresosReales}</p>
                   </div>
                 </div>
 
-                {/* Métricas y Desgloses Secundarios */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
                   <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 space-y-4">
-                    <h3 className="font-bold text-gray-800 text-base border-b pb-2">📋 Desglose por Estado</h3>
+                    <h3 className="font-bold text-lg text-gray-800">Desglose de Estados</h3>
                     <div className="space-y-2 text-sm">
-                      <div className="flex justify-between"><span className="text-gray-500">Confirmadas:</span><span className="font-bold text-blue-600">{citasConfirmadas}</span></div>
-                      <div className="flex justify-between"><span className="text-gray-500">Pendientes:</span><span className="font-bold text-amber-600">{citasPendientes}</span></div>
-                      <div className="flex justify-between"><span className="text-gray-500">Canceladas:</span><span className="font-bold text-red-600">{citasCanceladas}</span></div>
+                      <div className="flex justify-between py-1 border-b">
+                        <span className="text-gray-600">Pendientes</span>
+                        <span className="font-bold text-amber-600">{citasPendientes}</span>
+                      </div>
+                      <div className="flex justify-between py-1 border-b">
+                        <span className="text-gray-600">Confirmadas</span>
+                        <span className="font-bold text-blue-600">{citasConfirmadas}</span>
+                      </div>
+                      <div className="flex justify-between py-1 border-b">
+                        <span className="text-gray-600">Completadas</span>
+                        <span className="font-bold text-emerald-600">{citasCompletadas}</span>
+                      </div>
+                      <div className="flex justify-between py-1">
+                        <span className="text-gray-600">Canceladas</span>
+                        <span className="font-bold text-red-600">{citasCanceladas}</span>
+                      </div>
                     </div>
                   </div>
 
                   <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 space-y-4">
-                    <h3 className="font-bold text-gray-800 text-base border-b pb-2">💰 Finanzas y Promedios</h3>
+                    <h3 className="font-bold text-lg text-gray-800">Métricas Clave</h3>
                     <div className="space-y-2 text-sm">
-                      <div className="flex justify-between"><span className="text-gray-500">Ingresos Reales (Completadas):</span><span className="font-bold text-emerald-600">${ingresosReales}</span></div>
-                      <div className="flex justify-between"><span className="text-gray-500">Ticket Promedio por Cita:</span><span className="font-bold text-gray-800">${ticketPromedio}</span></div>
-                      <div className="flex justify-between"><span className="text-gray-500">Tasa de Cancelación:</span><span className="font-bold text-red-600">{tasaCancelacion}%</span></div>
-                    </div>
-                  </div>
-
-                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 space-y-4">
-                    <h3 className="font-bold text-gray-800 text-base border-b pb-2">🏆 Preferencias y Destacados</h3>
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between"><span className="text-gray-500">Servicio más popular:</span><span className="font-bold text-indigo-600 text-right truncate max-w-[150px]">{servicioMasPopular}</span></div>
-                      <div className="flex justify-between"><span className="text-gray-500">Total de profesionales:</span><span className="font-bold text-gray-800">{trabajadores.length}</span></div>
-                      <div className="flex justify-between"><span className="text-gray-500">Total de servicios:</span><span className="font-bold text-gray-800">{servicios.length}</span></div>
+                      <div className="flex justify-between py-1 border-b">
+                        <span className="text-gray-600">Ingresos Estimados (Potenciales)</span>
+                        <span className="font-bold text-gray-800">${ingresosEstimados}</span>
+                      </div>
+                      <div className="flex justify-between py-1 border-b">
+                        <span className="text-gray-600">Ticket Promedio por Cita</span>
+                        <span className="font-bold text-gray-800">${ticketPromedio}</span>
+                      </div>
+                      <div className="flex justify-between py-1 border-b">
+                        <span className="text-gray-600">Tasa de Cancelación</span>
+                        <span className="font-bold text-red-600">{tasaCancelacion}%</span>
+                      </div>
+                      <div className="flex justify-between py-1">
+                        <span className="text-gray-600">Servicio Más Popular</span>
+                        <span className="font-bold text-blue-600">{servicioMasPopular}</span>
+                      </div>
                     </div>
                   </div>
                 </div>
