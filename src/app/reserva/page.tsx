@@ -2,14 +2,16 @@
 
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
+import { obtenerDisponibilidad } from '@/utils/disponibilidad'
 
 export default function ReservarCita() {
   const [paso, setPaso] = useState(1)
   const [cargando, setCargando] = useState(false)
+  const [cargandoHoras, setCargandoHoras] = useState(false)
 
   const [servicios, setServicios] = useState<any[]>([])
   const [trabajadores, setTrabajadores] = useState<any[]>([])
-  const [horasOcupadas, setHorasOcupadas] = useState<string[]>([])
+  const [horasLibres, setHorasLibres] = useState<string[]>([])
 
   const [servicioSeleccionado, setServicioSeleccionado] = useState<any>(null)
   const [trabajadorSeleccionado, setTrabajadorSeleccionado] = useState<any>(null)
@@ -18,17 +20,15 @@ export default function ReservarCita() {
   
   const [cliente, setCliente] = useState({ nombre: '', telefono: '', email: '' })
 
-  const horasDisponibles = ['08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00']
-
   useEffect(() => {
     cargarDatosIniciales()
   }, [])
 
   useEffect(() => {
-    if (fechaSeleccionada && trabajadorSeleccionado) {
-      verificarDisponibilidad()
+    if (fechaSeleccionada && trabajadorSeleccionado && servicioSeleccionado) {
+      cargarDisponibilidadReal()
     }
-  }, [fechaSeleccionada, trabajadorSeleccionado])
+  }, [fechaSeleccionada, trabajadorSeleccionado, servicioSeleccionado])
 
   async function cargarDatosIniciales() {
     const { data: servs } = await supabase.from('servicios').select('*').eq('activo', true)
@@ -37,24 +37,17 @@ export default function ReservarCita() {
     if (trabs) setTrabajadores(trabs)
   }
 
-  async function verificarDisponibilidad() {
-    const fechaInicio = `${fechaSeleccionada}T00:00:00`
-    const fechaFin = `${fechaSeleccionada}T23:59:59`
-
-    const { data: citasExistentes } = await supabase
-      .from('citas')
-      .select('fecha_inicio')
-      .eq('trabajador_id', trabajadorSeleccionado.id)
-      .neq('estado', 'cancelada')
-      .gte('fecha_inicio', fechaInicio)
-      .lte('fecha_inicio', fechaFin)
-
-    if (citasExistentes) {
-      const ocupadas = citasExistentes.map(cita => {
-        const date = new Date(cita.fecha_inicio)
-        return date.toTimeString().slice(0, 5)
-      })
-      setHorasOcupadas(ocupadas)
+  async function cargarDisponibilidadReal() {
+    setCargandoHoras(true)
+    try {
+      const duracion = servicioSeleccionado.duracion || 30
+      const disponibles = await obtenerDisponibilidad(trabajadorSeleccionado.id, fechaSeleccionada, duracion)
+      setHorasLibres(disponibles)
+    } catch (error) {
+      console.error('Error al calcular horarios:', error)
+      setHorasLibres([])
+    } finally {
+      setCargandoHoras(false)
     }
   }
 
@@ -75,18 +68,9 @@ export default function ReservarCita() {
 
       if (clienteExistente) {
         clienteId = clienteExistente.id
-        const { error: errUpd } = await supabase
-          .from('clientes')
-          .update({ email: cliente.email, nombre: cliente.nombre })
-          .eq('id', clienteId)
-        if (errUpd) throw new Error('Error al actualizar cliente: ' + errUpd.message)
+        await supabase.from('clientes').update({ email: cliente.email, nombre: cliente.nombre }).eq('id', clienteId)
       } else {
-        const { data: nuevoCliente, error: errCli } = await supabase
-          .from('clientes')
-          .insert([cliente])
-          .select()
-          .single()
-        
+        const { data: nuevoCliente, error: errCli } = await supabase.from('clientes').insert([cliente]).select().single()
         if (errCli) throw new Error('Error al registrar cliente: ' + errCli.message)
         clienteId = nuevoCliente.id
       }
@@ -95,15 +79,12 @@ export default function ReservarCita() {
       const duracionMinutos = servicioSeleccionado.duracion || 30
       const fechaFinObj = new Date(fechaInicioObj.getTime() + duracionMinutos * 60000)
 
-      const fechaHoraISO = fechaInicioObj.toISOString()
-      const fechaFinISO = fechaFinObj.toISOString()
-
       const { error: errCita } = await supabase.from('citas').insert([{
         cliente_id: clienteId,
         servicio_id: servicioSeleccionado.id,
         trabajador_id: trabajadorSeleccionado.id,
-        fecha_inicio: fechaHoraISO,
-        fecha_fin: fechaFinISO,
+        fecha_inicio: fechaInicioObj.toISOString(),
+        fecha_fin: fechaFinObj.toISOString(),
         precio_congelado: servicioSeleccionado.precio,
         estado: 'pendiente'
       }])
@@ -169,26 +150,26 @@ export default function ReservarCita() {
             <h2 className="text-xl font-bold text-gray-700">3. Selecciona Fecha y Hora</h2>
             <input 
               type="date" 
-              min={new Date().toISOString().split('T')[0]} 
+              min={new Date().toLocaleString('en-CA', { timeZone: 'America/Bogota' }).split(',')[0]} 
               onChange={e => setFechaSeleccionada(e.target.value)} 
               className="w-full border rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-600 text-gray-900 bg-white"
             />
             
             {fechaSeleccionada && (
-              <div className="grid grid-cols-3 sm:grid-cols-4 gap-3 mt-4">
-                {horasDisponibles.map(hora => {
-                  const estaOcupada = horasOcupadas.includes(hora)
-                  return (
-                    <button 
-                      key={hora} 
-                      disabled={estaOcupada}
-                      onClick={() => { setHoraSeleccionada(hora); setPaso(4) }} 
-                      className={`py-2 rounded-xl text-sm font-bold border transition-colors ${estaOcupada ? 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-100' : 'bg-white text-blue-700 border-blue-200 hover:bg-blue-50'}`}
-                    >
-                      {hora}
-                    </button>
-                  )
-                })}
+              <div className="mt-4">
+                {cargandoHoras ? (
+                  <p className="text-sm text-gray-500 text-center py-4">Calculando horarios...</p>
+                ) : horasLibres.length > 0 ? (
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+                    {horasLibres.map(hora => (
+                      <button key={hora} onClick={() => { setHoraSeleccionada(hora); setPaso(4) }} className="py-2 rounded-xl text-sm font-bold border bg-white text-blue-700 border-blue-200 hover:bg-blue-50">
+                        {hora}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-red-500 font-medium text-center py-4">No hay horarios disponibles.</p>
+                )}
               </div>
             )}
           </div>
@@ -198,16 +179,9 @@ export default function ReservarCita() {
           <form onSubmit={confirmarReserva} className="space-y-4">
             <button type="button" onClick={() => setPaso(3)} className="text-sm text-blue-600 font-bold mb-4">← Volver</button>
             <h2 className="text-xl font-bold text-gray-700">4. Tus Datos</h2>
-            
-            <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 mb-6">
-              <p className="text-sm text-blue-800"><strong>Resumen:</strong> {servicioSeleccionado?.nombre} con {trabajadorSeleccionado?.nombre}</p>
-              <p className="text-sm text-blue-800"><strong>Cuándo:</strong> {fechaSeleccionada} a las {horaSeleccionada}</p>
-            </div>
-
             <input type="text" placeholder="Nombre completo" required onChange={e => setCliente({...cliente, nombre: e.target.value})} className="w-full border rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-600 text-gray-900 bg-white" />
-            <input type="tel" placeholder="Teléfono (Ej: 3101234567)" required onChange={e => setCliente({...cliente, telefono: e.target.value})} className="w-full border rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-600 text-gray-900 bg-white" />
+            <input type="tel" placeholder="Teléfono" required onChange={e => setCliente({...cliente, telefono: e.target.value})} className="w-full border rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-600 text-gray-900 bg-white" />
             <input type="email" placeholder="Correo electrónico" required onChange={e => setCliente({...cliente, email: e.target.value})} className="w-full border rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-600 text-gray-900 bg-white" />
-            
             <button type="submit" disabled={cargando} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition-colors mt-4">
               {cargando ? 'Procesando...' : 'Confirmar Reserva'}
             </button>
@@ -215,11 +189,34 @@ export default function ReservarCita() {
         )}
 
         {paso === 5 && (
-          <div className="text-center py-10">
-            <div className="text-6xl mb-4">✅</div>
-            <h2 className="text-2xl font-bold text-gray-800 mb-2">¡Cita Confirmada!</h2>
-            <p className="text-gray-600 mb-6">Te hemos enviado un correo con los detalles.</p>
-            <button onClick={() => window.location.reload()} className="text-blue-600 font-bold underline">Hacer otra reserva</button>
+          <div className="text-center py-10 space-y-6">
+            <div className="text-6xl mb-2 animate-bounce">✅</div>
+            <div>
+              <h2 className="text-2xl font-bold text-gray-800 mb-2">¡Cita Confirmada!</h2>
+              <p className="text-gray-600">Te hemos enviado un correo con los detalles.</p>
+            </div>
+
+            <button
+              onClick={() => {
+                const telefonoNegocio = "573005980054"; // CAMBIA ESTO POR EL REAL
+                const mensaje = `¡Hola! 👋 Confirmación de cita en CitaPro:\n\n` +
+                  `• Servicio: ${servicioSeleccionado?.nombre}\n` +
+                  `• Fecha: ${fechaSeleccionada}\n` +
+                  `• Hora: ${horaSeleccionada}\n` +
+                  `• Cliente: ${cliente.nombre}\n\n` +
+                  `¡Quedo atento!`;
+                
+                const url = `https://wa.me/${telefonoNegocio}?text=${encodeURIComponent(mensaje)}`;
+                window.open(url, "_blank");
+              }}
+              className="w-full flex items-center justify-center gap-2 bg-[#25D366] hover:bg-[#20ba5a] text-white font-bold py-3 px-4 rounded-xl transition-all shadow-md"
+            >
+              💬 Enviar confirmación a WhatsApp
+            </button>
+
+            <button onClick={() => window.location.reload()} className="text-gray-500 font-medium hover:text-blue-600 transition-colors">
+              Hacer otra reserva
+            </button>
           </div>
         )}
       </div>

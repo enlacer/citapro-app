@@ -74,7 +74,6 @@ export default function AdminDashboard() {
   const [cargando, setCargando] = useState(false)
   const [cargandoAuth, setCargandoAuth] = useState(true)
 
-  // ESTADOS PARA FILTROS Y PAGINACIÓN
   const [filtroEstado, setFiltroEstado] = useState('todos')
   const [filtroFecha, setFiltroFecha] = useState('todas')
   const [paginaActual, setPaginaActual] = useState(1)
@@ -124,6 +123,23 @@ export default function AdminDashboard() {
     return () => subscription.unsubscribe()
   }, [])
 
+  // Auto-cancelación inteligente de citas pendientes que ya pasaron de fecha
+  async function verificarCitasExpiradas(citasList: CitaConDetalles[]) {
+    const hoy = new Date()
+    hoy.setHours(0, 0, 0, 0)
+
+    const expiradas = citasList.filter(c => 
+      c.estado === 'pendiente' && new Date(c.fecha_inicio) < hoy
+    )
+
+    if (expiradas.length > 0) {
+      for (const cita of expiradas) {
+        await supabase.from('citas').update({ estado: 'cancelada' }).eq('id', cita.id)
+      }
+      cargarCitasSilencioso()
+    }
+  }
+
   async function cargarDatosGenerales() {
     setCargando(true)
     await Promise.all([cargarCitas(), cargarTrabajadores(), cargarServicios(), cargarCategorias()])
@@ -145,8 +161,33 @@ export default function AdminDashboard() {
       `)
       .order('fecha_inicio', { ascending: false })
 
-    if (error) alert('Error al cargar citas: ' + error.message)
-    else if (data) setCitas(data as unknown as CitaConDetalles[])
+    if (error) {
+      alert('Error al cargar citas: ' + error.message)
+    } else if (data) {
+      const citasMapeadas = data as unknown as CitaConDetalles[]
+      setCitas(citasMapeadas)
+      await verificarCitasExpiradas(citasMapeadas)
+    }
+  }
+
+  async function cargarCitasSilencioso() {
+    const { data } = await supabase
+      .from('citas')
+      .select(`
+        id,
+        fecha_inicio,
+        estado,
+        precio_congelado,
+        trabajador_id,
+        clientes ( nombre, telefono ),
+        servicios ( nombre ),
+        trabajadores ( id, nombre, especialidad )
+      `)
+      .order('fecha_inicio', { ascending: false })
+
+    if (data) {
+      setCitas(data as unknown as CitaConDetalles[])
+    }
   }
 
   async function cargarTrabajadores() {
@@ -286,7 +327,7 @@ export default function AdminDashboard() {
   }
 
   if (cargandoAuth) {
-    return <div className="text-center py-20 text-gray-500">Verificando sesión y seguridad...</div>
+    return <div className="text-center py-20 text-gray-500 font-medium">Verificando sesión y seguridad...</div>
   }
 
   if (!sesion) {
@@ -329,7 +370,6 @@ export default function AdminDashboard() {
       )
   }
 
-  // LÓGICA DE FILTRADO DE CITAS
   const hoyObj = new Date();
   hoyObj.setHours(0, 0, 0, 0);
   const mananaObj = new Date(hoyObj);
@@ -353,18 +393,18 @@ export default function AdminDashboard() {
     return true;
   });
 
-  // LÓGICA DE PAGINACIÓN DE CITAS
   const totalPaginas = Math.ceil(citasFiltradas.length / citasPorPagina) || 1;
   const indiceInicio = (paginaActual - 1) * citasPorPagina;
   const citasPaginadas = citasFiltradas.slice(indiceInicio, indiceInicio + citasPorPagina);
 
-  // Cálculos analíticos
+  const citasAEnviar = citasFiltradas.filter(c => c.estado === 'pendiente' && !!c.clientes?.telefono);
+
   const totalCitas = citas.length
   const citasCompletadas = citas.filter(c => c.estado === 'completada').length
   const citasConfirmadas = citas.filter(c => c.estado === 'confirmada').length
   const citasPendientes = citas.filter(c => c.estado === 'pendiente').length
   const citasCanceladas = citas.filter(c => c.estado === 'cancelada').length
-
+  
   const ingresosReales = citas
     .filter(c => c.estado === 'completada')
     .reduce((acc, curr) => acc + (curr.precio_congelado || 0), 0)
@@ -374,16 +414,6 @@ export default function AdminDashboard() {
     .reduce((acc, curr) => acc + (curr.precio_congelado || 0), 0)
 
   const tasaExito = totalCitas > 0 ? ((citasCompletadas / totalCitas) * 100).toFixed(1) : '0'
-  const tasaCancelacion = totalCitas > 0 ? ((citasCanceladas / totalCitas) * 100).toFixed(1) : '0'
-  const ticketPromedio = totalCitas > 0 ? (ingresosEstimados / totalCitas).toFixed(0) : '0'
-
-  const conteoServicios: { [key: string]: number } = {}
-  citas.forEach(c => {
-    if (c.servicios?.nombre) {
-      conteoServicios[c.servicios.nombre] = (conteoServicios[c.servicios.nombre] || 0) + 1
-    }
-  })
-  const servicioMasPopular = Object.entries(conteoServicios).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Sin datos'
 
   return (
     <main className="min-h-screen bg-gray-50 p-6">
@@ -407,12 +437,45 @@ export default function AdminDashboard() {
         </div>
 
         {cargando ? (
-            <div className="text-center py-20 text-gray-500">Cargando información...</div>
+            <div className="text-center py-20 text-gray-500 font-medium">Cargando información...</div>
         ) : (
           <>
             {pestanaActiva === 'citas' && (
               <div>
-                {/* BARRA DE FILTROS CON ESTILOS CORREGIDOS */}
+                <div className="mb-6 bg-gradient-to-r from-emerald-600 to-teal-700 p-6 rounded-2xl shadow-md text-white flex flex-col md:flex-row justify-between items-center gap-4">
+                  <div>
+                    <h3 className="text-xl font-bold flex items-center gap-2">
+                      <span>📢</span> Recordatorios de WhatsApp (Pendientes)
+                    </h3>
+                    <p className="text-emerald-100 text-sm mt-1">
+                      Envía recordatorios masivos a las citas pendientes que coincidan con tus filtros.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      if (citasAEnviar.length === 0) {
+                        alert('No hay citas pendientes con teléfono en los filtros actuales.');
+                        return;
+                      }
+
+                      if (confirm(`Se abrirán ${citasAEnviar.length} pestañas de WhatsApp para enviar los recordatorios a citas pendientes. ¿Deseas continuar?`)) {
+                        citasAEnviar.forEach((cita, index) => {
+                          const telLimpio = cita.clientes.telefono.replace(/\D/g, '');
+                          const horaCita = new Date(cita.fecha_inicio).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+                          const mensaje = `¡Hola ${cita.clientes.nombre}! 👋 Te recordamos tu cita de *${cita.servicios?.nombre || 'servicio'}* programada para las *${horaCita}* en CitaPro. ¡Te esperamos!`;
+                          
+                          setTimeout(() => {
+                            window.open(`https://wa.me/${telLimpio}?text=${encodeURIComponent(mensaje)}`, '_blank');
+                          }, index * 400);
+                        });
+                      }
+                    }}
+                    className="bg-white hover:bg-emerald-50 text-emerald-800 font-bold px-5 py-3 rounded-xl transition-all shadow-sm text-sm flex items-center gap-2 shrink-0"
+                  >
+                    🚀 Enviar a los {citasAEnviar.length} pendientes
+                  </button>
+                </div>
+
                 <div className="flex flex-col md:flex-row gap-4 mb-6 bg-white p-4 rounded-2xl shadow-sm border border-gray-200">
                   <div className="flex-1">
                     <label className="text-xs text-gray-500 font-bold uppercase mb-1 block">Filtrar por Estado</label>
@@ -421,11 +484,11 @@ export default function AdminDashboard() {
                       onChange={e => setFiltroEstado(e.target.value)} 
                       className="w-full border border-gray-300 rounded-xl p-2.5 text-sm bg-white text-gray-900 font-medium outline-none focus:ring-2 focus:ring-blue-600"
                     >
-                      <option value="todos" className="text-gray-900 bg-white">Todos los estados</option>
-                      <option value="pendiente" className="text-gray-900 bg-white">Pendientes</option>
-                      <option value="confirmada" className="text-gray-900 bg-white">Confirmadas</option>
-                      <option value="completada" className="text-gray-900 bg-white">Completadas</option>
-                      <option value="cancelada" className="text-gray-900 bg-white">Canceladas</option>
+                      <option value="todos">Todos los estados</option>
+                      <option value="pendiente">Pendientes</option>
+                      <option value="confirmada">Confirmadas</option>
+                      <option value="completada">Completadas</option>
+                      <option value="cancelada">Canceladas</option>
                     </select>
                   </div>
                   <div className="flex-1">
@@ -435,11 +498,11 @@ export default function AdminDashboard() {
                       onChange={e => setFiltroFecha(e.target.value)} 
                       className="w-full border border-gray-300 rounded-xl p-2.5 text-sm bg-white text-gray-900 font-medium outline-none focus:ring-2 focus:ring-blue-600"
                     >
-                      <option value="todas" className="text-gray-900 bg-white">Cualquier fecha</option>
-                      <option value="hoy" className="text-gray-900 bg-white">Hoy</option>
-                      <option value="manana" className="text-gray-900 bg-white">Mañana</option>
-                      <option value="proximos_7" className="text-gray-900 bg-white">Próximos 7 días</option>
-                      <option value="pasadas" className="text-gray-900 bg-white">Citas Pasadas</option>
+                      <option value="todas">Cualquier fecha</option>
+                      <option value="hoy">Hoy</option>
+                      <option value="manana">Mañana</option>
+                      <option value="proximos_7">Próximos 7 días</option>
+                      <option value="pasadas">Citas Pasadas</option>
                     </select>
                   </div>
                   <div className="flex items-end">
@@ -447,31 +510,58 @@ export default function AdminDashboard() {
                   </div>
                 </div>
 
-                {/* GRID DE CITAS PAGINADAS */}
                 {citasPaginadas.length === 0 ? (
-                  <div className="text-center py-10 bg-white rounded-2xl border border-gray-200 text-gray-500">
+                  <div className="text-center py-10 bg-white rounded-2xl border border-gray-200 text-gray-500 font-medium">
                     No se encontraron citas con estos filtros.
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {citasPaginadas.map(cita => {
+                    const fechaCitaObj = new Date(cita.fecha_inicio);
+                    fechaCitaObj.setHours(0, 0, 0, 0);
+                    
+                    const esCancelacionSistema = cita.estado === 'cancelada' && fechaCitaObj < hoyObj;
                     const fechaFormateada = new Date(cita.fecha_inicio).toLocaleString('es-ES', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
                     const estaBloqueada = cita.estado === 'cancelada' || cita.estado === 'completada'
+                    
                     let colorEstado = 'bg-gray-100 text-gray-800 border-gray-200'
                     if (cita.estado === 'confirmada') colorEstado = 'bg-blue-50 text-blue-700 border-blue-200'
                     if (cita.estado === 'completada') colorEstado = 'bg-green-50 text-green-700 border-green-200'
-                    if (cita.estado === 'cancelada') colorEstado = 'bg-red-50 text-red-700 border-red-200'
+                    if (cita.estado === 'cancelada') {
+                      colorEstado = esCancelacionSistema ? 'bg-orange-50 text-orange-700 border-orange-200' : 'bg-red-50 text-red-700 border-red-200'
+                    }
                     if (cita.estado === 'pendiente') colorEstado = 'bg-amber-50 text-amber-700 border-amber-200'
+                    
                     return (
-                      <div key={cita.id} className={`bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col justify-between ${estaBloqueada ? 'opacity-80 bg-gray-50' : ''}`}>
+                      <div key={cita.id} className={`bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col justify-between ${estaBloqueada ? 'opacity-85 bg-gray-50' : ''}`}>
                         <div>
                           <div className={`px-5 py-3 border-b flex justify-between items-center text-xs font-bold uppercase tracking-wider ${colorEstado}`}>
-                            <span>{cita.estado} {estaBloqueada && '🔒'}</span>
+                            <span>
+                              {esCancelacionSistema ? '⚠️ Cancelada (Sistema)' : cita.estado} {estaBloqueada && '🔒'}
+                            </span>
                             <span>{fechaFormateada}</span>
                           </div>
                           <div className="p-5 space-y-3">
-                            <h3 className="font-bold text-lg text-gray-900">{cita.clientes?.nombre || 'Cliente'}</h3>
-                            <p className="text-gray-500 text-sm flex items-center gap-1">📞 {cita.clientes?.telefono || 'Sin teléfono'}</p>
+                            <div>
+                              <h3 className="font-bold text-lg text-gray-900">{cita.clientes?.nombre || 'Cliente'}</h3>
+                            </div>
+                            
+                            <div className="flex justify-between items-center">
+                              <p className="text-gray-500 text-sm flex items-center gap-1">📞 {cita.clientes?.telefono || 'Sin teléfono'}</p>
+                              {cita.clientes?.telefono && (
+                                <button
+                                  onClick={() => {
+                                    const telLimpio = cita.clientes.telefono.replace(/\D/g, '');
+                                    const mensajeAdmin = `¡Hola ${cita.clientes.nombre}! 👋 Te contactamos desde CitaPro respecto a tu cita de *${cita.servicios?.nombre || 'servicio'}* programada para el *${fechaFormateada}*.`;
+                                    window.open(`https://wa.me/${telLimpio}?text=${encodeURIComponent(mensajeAdmin)}`, '_blank');
+                                  }}
+                                  className="bg-green-50 hover:bg-green-100 text-green-600 px-3 py-1.5 rounded-xl transition-colors flex items-center gap-1 text-xs font-bold"
+                                >
+                                  💬 WhatsApp
+                                </button>
+                              )}
+                            </div>
+
                             <div className="bg-gray-50 p-3 rounded-xl border border-gray-100 space-y-2">
                               <p className="font-bold text-gray-800">{cita.servicios?.nombre || 'Servicio'}</p>
                               <label className="text-xs text-gray-500 font-medium block">Profesional:</label>
@@ -481,10 +571,10 @@ export default function AdminDashboard() {
                                 disabled={estaBloqueada} 
                                 className="w-full text-xs border rounded-lg p-1.5 bg-white text-gray-900 font-medium"
                               >
-                                <option value="" className="text-gray-900 bg-white">Disponible</option>
-                                {trabajadores.map(trab => (<option key={trab.id} value={trab.id} className="text-gray-900 bg-white">{trab.nombre} ({trab.especialidad})</option>))}
+                                <option value="">Disponible</option>
+                                {trabajadores.map(trab => (<option key={trab.id} value={trab.id}>{trab.nombre} ({trab.especialidad})</option>))}
                               </select>
-                              <p className="text-emerald-600 font-bold text-sm">Total: ${cita.precio_congelado}</p>
+                              <p className="text-emerald-600 font-bold text-sm">Total: ${cita.precio_congelado?.toLocaleString('es-ES')}</p>
                             </div>
                           </div>
                         </div>
@@ -499,26 +589,11 @@ export default function AdminDashboard() {
                   </div>
                 )}
 
-                {/* CONTROLES DE PAGINACIÓN */}
                 {totalPaginas > 1 && (
                   <div className="flex justify-between items-center mt-6 bg-white p-4 rounded-2xl shadow-sm border border-gray-200">
-                    <button
-                      onClick={() => setPaginaActual(p => Math.max(1, p - 1))}
-                      disabled={paginaActual === 1}
-                      className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl disabled:opacity-50 text-sm font-bold transition-colors"
-                    >
-                      ← Anterior
-                    </button>
-                    <span className="text-sm text-gray-600 font-bold">
-                      Página {paginaActual} de {totalPaginas}
-                    </span>
-                    <button
-                      onClick={() => setPaginaActual(p => Math.min(totalPaginas, p + 1))}
-                      disabled={paginaActual === totalPaginas}
-                      className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl disabled:opacity-50 text-sm font-bold transition-colors"
-                    >
-                      Siguiente →
-                    </button>
+                    <button onClick={() => setPaginaActual(p => Math.max(1, p - 1))} disabled={paginaActual === 1} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-xl disabled:opacity-50 text-sm font-bold">← Anterior</button>
+                    <span className="text-sm text-gray-600 font-bold">Página {paginaActual} de {totalPaginas}</span>
+                    <button onClick={() => setPaginaActual(p => Math.min(totalPaginas, p + 1))} disabled={paginaActual === totalPaginas} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-xl disabled:opacity-50 text-sm font-bold">Siguiente →</button>
                   </div>
                 )}
               </div>
@@ -532,12 +607,8 @@ export default function AdminDashboard() {
                     <input type="text" placeholder="Nombre" value={nuevoServicioNombre} onChange={e => setNuevoServicioNombre(e.target.value)} className="w-full border rounded-xl p-2.5 text-sm bg-white text-gray-900" required />
                     <input type="number" placeholder="Precio" value={nuevoServicioPrecio} onChange={e => setNuevoServicioPrecio(e.target.value)} className="w-full border rounded-xl p-2.5 text-sm bg-white text-gray-900" required />
                     <input type="number" placeholder="Minutos" value={nuevoServicioDuracion} onChange={e => setNuevoServicioDuracion(e.target.value)} className="w-full border rounded-xl p-2.5 text-sm bg-white text-gray-900" required />
-                    <select 
-                      value={nuevoServicioCategoria} 
-                      onChange={e => setNuevoServicioCategoria(e.target.value)} 
-                      className="w-full border rounded-xl p-2.5 text-sm bg-white text-gray-900 font-medium"
-                    >
-                      {categorias.map(cat => (<option key={cat.id} value={cat.id} className="text-gray-900 bg-white">{cat.nombre}</option>))}
+                    <select value={nuevoServicioCategoria} onChange={e => setNuevoServicioCategoria(e.target.value)} className="w-full border rounded-xl p-2.5 text-sm bg-white text-gray-900">
+                      {categorias.map(cat => (<option key={cat.id} value={cat.id}>{cat.nombre}</option>))}
                     </select>
                     <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-4 rounded-xl text-sm transition-colors">Guardar</button>
                   </form>
@@ -554,12 +625,11 @@ export default function AdminDashboard() {
                                 <input className="border rounded px-2 py-1 text-sm w-20 bg-white text-gray-900" type="number" value={editPrecio} onChange={e => setEditPrecio(e.target.value)} />
                                 <input className="border rounded px-2 py-1 text-sm w-20 bg-white text-gray-900" type="number" value={editDuracion} onChange={e => setEditDuracion(e.target.value)} />
                                 <button onClick={() => guardarEdicionServicio(serv.id)} className="bg-green-600 text-white px-3 py-1 rounded text-xs font-bold">Guardar</button>
-                                <button onClick={() => setEditandoServicioId(null)} className="bg-gray-400 text-white px-3 py-1 rounded text-xs">X</button>
                             </div>
                         ) : (
                             <div className="flex-grow">
                                 <p className="font-bold text-gray-800">{serv.nombre}</p>
-                                <p className="text-sm text-gray-500">Duración: {serv.duracion} min | Precio: ${serv.precio}</p>
+                                <p className="text-sm text-gray-500">Duración: {serv.duracion} min | Precio: ${serv.precio?.toLocaleString('es-ES')}</p>
                             </div>
                         )}
                         <div className="flex gap-2">
@@ -617,56 +687,44 @@ export default function AdminDashboard() {
                     <p className="text-3xl font-bold text-emerald-600 mt-2">{citasCompletadas}</p>
                   </div>
                   <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-                    <p className="text-sm text-gray-500 font-medium">Tasa de Éxito / Realización</p>
+                    <p className="text-sm text-gray-500 font-medium">Tasa de Éxito</p>
                     <p className="text-3xl font-bold text-blue-600 mt-2">{tasaExito}%</p>
                   </div>
                   <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
                     <p className="text-sm text-gray-500 font-medium">Ingresos Reales</p>
-                    <p className="text-3xl font-bold text-emerald-600 mt-2">${ingresosReales}</p>
+                    <p className="text-3xl font-bold text-emerald-600 mt-2">${ingresosReales.toLocaleString('es-ES')}</p>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 space-y-4">
-                    <h3 className="font-bold text-lg text-gray-800">Desglose de Estados</h3>
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between py-1 border-b">
-                        <span className="text-gray-600">Pendientes</span>
-                        <span className="font-bold text-amber-600">{citasPendientes}</span>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+                    <h3 className="text-lg font-bold text-gray-800 mb-4">Desglose de Estados de Citas</h3>
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-center p-3 bg-blue-50 rounded-xl text-blue-800 font-medium text-sm">
+                        <span>Confirmadas</span>
+                        <span className="font-bold">{citasConfirmadas}</span>
                       </div>
-                      <div className="flex justify-between py-1 border-b">
-                        <span className="text-gray-600">Confirmadas</span>
-                        <span className="font-bold text-blue-600">{citasConfirmadas}</span>
+                      <div className="flex justify-between items-center p-3 bg-amber-50 rounded-xl text-amber-800 font-medium text-sm">
+                        <span>Pendientes</span>
+                        <span className="font-bold">{citasPendientes}</span>
                       </div>
-                      <div className="flex justify-between py-1 border-b">
-                        <span className="text-gray-600">Completadas</span>
-                        <span className="font-bold text-emerald-600">{citasCompletadas}</span>
-                      </div>
-                      <div className="flex justify-between py-1">
-                        <span className="text-gray-600">Canceladas</span>
-                        <span className="font-bold text-red-600">{citasCanceladas}</span>
+                      <div className="flex justify-between items-center p-3 bg-red-50 rounded-xl text-red-800 font-medium text-sm">
+                        <span>Canceladas (Incluye sistema)</span>
+                        <span className="font-bold">{citasCanceladas}</span>
                       </div>
                     </div>
                   </div>
 
-                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 space-y-4">
-                    <h3 className="font-bold text-lg text-gray-800">Métricas Clave</h3>
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between py-1 border-b">
-                        <span className="text-gray-600">Ingresos Estimados (Potenciales)</span>
-                        <span className="font-bold text-gray-800">${ingresosEstimados}</span>
+                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+                    <h3 className="text-lg font-bold text-gray-800 mb-4">Proyección Financiera</h3>
+                    <div className="space-y-3">
+                      <div className="p-4 bg-gray-50 rounded-xl border border-gray-100">
+                        <p className="text-xs text-gray-500 font-bold uppercase">Ingresos Estimados (Completadas + Confirmadas)</p>
+                        <p className="text-2xl font-bold text-gray-800 mt-1">${ingresosEstimados.toLocaleString('es-ES')}</p>
                       </div>
-                      <div className="flex justify-between py-1 border-b">
-                        <span className="text-gray-600">Ticket Promedio por Cita</span>
-                        <span className="font-bold text-gray-800">${ticketPromedio}</span>
-                      </div>
-                      <div className="flex justify-between py-1 border-b">
-                        <span className="text-gray-600">Tasa de Cancelación</span>
-                        <span className="font-bold text-red-600">{tasaCancelacion}%</span>
-                      </div>
-                      <div className="flex justify-between py-1">
-                        <span className="text-gray-600">Servicio Más Popular</span>
-                        <span className="font-bold text-blue-600">{servicioMasPopular}</span>
+                      <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100">
+                        <p className="text-xs text-emerald-700 font-bold uppercase">Ingresos Reales Efectivos (Solo Completadas)</p>
+                        <p className="text-2xl font-bold text-emerald-700 mt-1">${ingresosReales.toLocaleString('es-ES')}</p>
                       </div>
                     </div>
                   </div>
